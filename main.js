@@ -1285,12 +1285,9 @@ ipcMain.handle('app:clear-translate-cache', () => {
 });
 
 ipcMain.handle('app:get-diagnostics-snapshot', async () => {
-  let memInfo = null;
-  try {
-    if (typeof process.getProcessMemoryInfo === 'function') {
-      memInfo = await process.getProcessMemoryInfo();
-    }
-  } catch (_) {}
+  // The UI already displays Node's RSS/heap counters. Avoid Chromium's global
+  // memory-dump request here: it adds native teardown work to a diagnostics read.
+  const memInfo = null;
   let mu = null;
   try {
     mu = process.memoryUsage();
