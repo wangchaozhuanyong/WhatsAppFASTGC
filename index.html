@@ -9766,7 +9766,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             );
         }
 
-        function SeatWebview({ seatId, activeSeatId, webviewSrc, webpreferences, webviewRef, webviewRefsBySeatRef, onWebviewReady, onWebviewEvent }) {
+        function SeatWebview({ seatId, activeSeatId, webviewSrc, webpreferences, userAgent, webviewRef, webviewRefsBySeatRef, onWebviewReady, onWebviewEvent }) {
             const onWebviewReadyRef = useRef(onWebviewReady);
             const onWebviewEventRef = useRef(onWebviewEvent);
             useEffect(() => {
@@ -9797,7 +9797,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                 const el = webviewRefsBySeatRef.current[sid];
                 if (!el) return undefined;
                 el.__fastgcSeatId = sid;
-                try { el.setAttribute('useragent', WA_UA); } catch (_) {}
+                try { el.setAttribute('useragent', userAgent || WA_UA); } catch (_) {}
                 if (typeof el.addEventListener !== 'function') return undefined;
                 const isWhatsAppUrl = () => {
                     try {
@@ -9901,7 +9901,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                     el.removeEventListener('render-process-gone', onRenderGone);
                     el.removeEventListener('ipc-message', onIpcMessage);
                 };
-            }, [seatId, webpreferences, webviewSrc, isActive]);
+            }, [seatId, webpreferences, webviewSrc, userAgent, isActive]);
 
             return (
                 <webview
@@ -9909,6 +9909,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                     ref={setSeatWebviewRef}
                     src={webviewSrc}
                     partition={`${WA_PARTITION_PREFIX}${seatId}`}
+                    useragent={userAgent || WA_UA}
                     allowpopups="true"
                     webpreferences={webpreferences}
                     style={{
@@ -9930,12 +9931,19 @@ ${WA_INJECT_TRANSLATE_CORE}
             const webviewSrc = waUrlByLang(uiLang);
             const [wvPrefsReady, setWvPrefsReady] = useState(false);
             const [translatePreloadUrl, setTranslatePreloadUrl] = useState('');
+            const [userAgent, setUserAgent] = useState(WA_UA);
             useEffect(() => {
                 let cancelled = false;
                 (async () => {
                     try {
-                        const u = await window.fastgcBridge?.getWebviewTranslatePreloadUrl?.();
-                        if (!cancelled) setTranslatePreloadUrl(typeof u === 'string' ? u : '');
+                        const [u, ua] = await Promise.all([
+                            window.fastgcBridge?.getWebviewTranslatePreloadUrl?.(),
+                            window.fastgcBridge?.getWhatsAppUserAgent?.(),
+                        ]);
+                        if (!cancelled) {
+                            setTranslatePreloadUrl(typeof u === 'string' ? u : '');
+                            setUserAgent(typeof ua === 'string' && ua ? ua : WA_UA);
+                        }
                     } catch (_) {
                         if (!cancelled) setTranslatePreloadUrl('');
                     } finally {
@@ -9968,6 +9976,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                             activeSeatId={activeSeatId}
                             webviewSrc={webviewSrc}
                             webpreferences={webpreferences}
+                            userAgent={userAgent}
                             webviewRef={webviewRef}
                             webviewRefsBySeatRef={webviewRefsBySeatRef}
                             onWebviewReady={onWebviewReady}

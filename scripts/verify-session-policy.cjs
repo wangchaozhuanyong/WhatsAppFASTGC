@@ -15,4 +15,6 @@ let result;hooks[0].fn({requestHeaders:{'User-Agent':'stale-UA'}},value=>result=
 assert.equal(result.requestHeaders['User-Agent'],'Chrome/156.0.0.0');
 assert.equal(result.requestHeaders['Accept-Language'],'en-US');
 assert.ok(!source.includes('for (let i = 1; i <= seatCount; i++)'));
+const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
+assert.ok(html.includes('getWhatsAppUserAgent?.()')&&html.includes('useragent={userAgent || WA_UA}'));
 console.log(JSON.stringify({passed:true,singleHeaderListener:true,whatsAppAndTranslateCovered:true,sessionConfiguredOnce:true,unusedSeatsNotPrecreated:true}));
