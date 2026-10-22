@@ -1,0 +1,119 @@
+{
+  "name": "fastgc-whatsapp-shell",
+  "version": "1.0.34",
+  "private": true,
+  "author": "FastGC",
+  "description": "FastGC UI shell with embedded WhatsApp Web (Electron webview)",
+  "main": "main.js",
+  "scripts": {
+    "build:wa-send-pipeline": "node scripts/build-wa-send-pipeline.mjs",
+    "build:renderer-ts": "node scripts/build-renderer-ts.mjs",
+    "build:wpp-wa-js": "node scripts/copy-wpp-wa-js.mjs",
+    "build:tailwind": "tailwindcss -i ./src/styles/tailwind-input.css -o ./dist/tailwind.css --minify",
+    "build:meta": "node scripts/build-meta.mjs",
+    "build:pack-bundles": "npm run build:wa-send-pipeline && npm run build:renderer-ts && npm run build:wpp-wa-js && npm run build:tailwind && npm run build:meta && npm run build:renderer-app",
+    "ensure:win-pack-output-free": "node scripts/ensure-electron-out-dir-free.mjs",
+    "prestart": "npm run build:pack-bundles",
+    "predist:win": "npm run test:simulate-phone-and-jump && npm run build:pack-bundles",
+    "predist:win:build": "npm run test:simulate-phone-and-jump && npm run build:pack-bundles",
+    "prepack:win": "npm run test:simulate-phone-and-jump && npm run build:pack-bundles",
+    "start": "electron .",
+    "dist:win": "npm run ensure:win-pack-output-free && electron-builder --win nsis",
+    "stage:lan": "node scripts/stage-lan-update.mjs",
+    "release:lan": "npm run dist:win && npm run stage:lan",
+    "dist:win:build": "npm run dist:win",
+    "release:lan:build": "npm run release:lan",
+    "serve:lan": "node scripts/lan-update-server.mjs",
+    "pack:win": "npm run ensure:win-pack-output-free && electron-builder --win portable",
+    "test:simulate-wa-phone": "node scripts/simulate-wa-phone-sync.mjs",
+    "test:simulate-inbox-jump": "node scripts/simulate-inbox-jump-and-phone.mjs",
+    "test:simulate-phone-and-jump": "npm run test:simulate-inbox-jump && npm run test:simulate-wa-phone",
+    "test:simulate-send-translate": "node scripts/simulate-send-translate-structure.mjs",
+    "test:wa-js-compat": "node scripts/verify-wa-js-compat.mjs",
+    "test:member-removal": "node scripts/verify-member-removal.mjs",
+    "test:simulate-host-bridge": "node scripts/simulate-host-bridge.mjs",
+    "test:smoke-diagnostics": "node scripts/verify-diagnostics-cleanup.mjs --electron-smoke-only",
+    "verify:diagnostics-cleanup": "node scripts/verify-diagnostics-cleanup.mjs",
+    "test": "npm run test:simulate-phone-and-jump",
+    "ci": "npm run build:pack-bundles && npm run test:wa-js-compat && npm run test:member-removal && npm run test:simulate-phone-and-jump && npm run test:simulate-send-translate && npm run test:simulate-host-bridge && node scripts/verify-diagnostics-cleanup.mjs --skip-electron-smoke && npx tsc --noEmit",
+    "build:renderer-app": "node scripts/build-renderer-app.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@babel/standalone": "^7.29.3",
+    "@tailwindcss/cli": "^4.2.4",
+    "@wppconnect/wa-js": "^4.0.0",
+    "electron": "45.0.0",
+    "electron-builder": "^26.9.0",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^5.7.3"
+  },
+  "build": {
+    "appId": "com.fastgc.whatsapp.shell",
+    "productName": "FastGC WhatsApp",
+    "asar": true,
+    "forceCodeSigning": true,
+    "directories": {
+      "output": "electron-pack-output"
+    },
+    "files": [
+      "main.js",
+      "cloud-translation.js",
+      "preload.js",
+      "webview-translate-preload.js",
+      {
+        "from": "generated/renderer",
+        "to": ".",
+        "filter": [
+          "index.html"
+        ]
+      },
+      "dist/**/*",
+      "package.json",
+      "node_modules/react/umd/**",
+      "node_modules/react-dom/umd/**",
+      "data-root-migration.js",
+      "shutdown-guard.js"
+    ],
+    "win": {
+      "signAndEditExecutable": true,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "include": "build/installer.nsh",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "FastGC WhatsApp",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "displayLanguageSelector": true
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://127.0.0.1:9330/"
+    },
+    "afterPack": "scripts/verify-packaged-app.cjs"
+  }
+}

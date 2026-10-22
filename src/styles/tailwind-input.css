@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* Local Tailwind fallback for the Electron shell.
+   The CDN script remains enabled in index.html; this file is built into
+   dist/tailwind.css so packaged/offline starts still have utility styles. */
+@source "../../index.html";
+@source "../**/*.{js,ts,jsx,tsx,html}";

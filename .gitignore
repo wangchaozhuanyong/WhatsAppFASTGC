@@ -1,0 +1,35 @@
+node_modules/
+dist/
+out/
+*.log
+
+# 安装包与本地发布目录（不进源码仓）
+/release-build/
+/release-build-new/
+/electron-pack-output/
+/release/
+/release-test/
+/publish/
+
+# 本地解压对照用（来源于用户下发的 wa-js 源码压缩包；体积大且不参与构建）
+/vendor/wa-js-main-extracted/
+
+# 本地对照克隆的 wa-js 仓库（不参与构建）
+/_wa-js-ref/
+
+# 构建脚本生成（npm run build:wa-send-pipeline 会重新写出）
+/generated/
+
+# 本地 asar 解包对照（排查打包内容时产生）
+/.tmp_asar_extract*/
+
+# 本机账号、密钥与运行数据不进入源码发布
+.env
+.env.*
+*.pfx
+*.p12
+*.key
+fastgc-cloud-translation*.json
+fastgc_bootstrap_config.json
+Partitions/
+Local Storage/
