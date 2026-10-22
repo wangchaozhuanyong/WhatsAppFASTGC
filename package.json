@@ -1,6 +1,6 @@
 {
   "name": "fastgc-whatsapp-shell",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "private": true,
   "author": "FastGC",
   "description": "FastGC UI shell with embedded WhatsApp Web (Electron webview)",
@@ -35,8 +35,9 @@
     "test:smoke-diagnostics": "node scripts/verify-diagnostics-cleanup.mjs --electron-smoke-only",
     "verify:diagnostics-cleanup": "node scripts/verify-diagnostics-cleanup.mjs",
     "test": "npm run test:simulate-phone-and-jump",
-    "ci": "npm run build:pack-bundles && npm run test:wa-js-compat && npm run test:member-removal && npm run test:simulate-phone-and-jump && npm run test:simulate-send-translate && npm run test:simulate-host-bridge && node scripts/verify-diagnostics-cleanup.mjs --skip-electron-smoke && npx tsc --noEmit",
-    "build:renderer-app": "node scripts/build-renderer-app.mjs"
+    "ci": "npm run build:pack-bundles && npm run test:wa-js-compat && npm run test:member-removal && npm run test:simulate-phone-and-jump && npm run test:simulate-send-translate && npm run test:simulate-host-bridge && node scripts/verify-diagnostics-cleanup.mjs --skip-electron-smoke && npx tsc --noEmit && npm run test:shutdown-flow",
+    "build:renderer-app": "node scripts/build-renderer-app.mjs",
+    "test:shutdown-flow": "node scripts/verify-shutdown-flow.cjs && node scripts/verify-session-policy.cjs"
   },
   "dependencies": {
     "electron-updater": "6.8.9",
@@ -78,7 +79,8 @@
       "node_modules/react/umd/**",
       "node_modules/react-dom/umd/**",
       "data-root-migration.js",
-      "shutdown-guard.js"
+      "shutdown-guard.js",
+      "shutdown-flow.js"
     ],
     "win": {
       "signAndEditExecutable": true,
@@ -115,5 +117,8 @@
       "url": "https://127.0.0.1:9330/"
     },
     "afterPack": "scripts/verify-packaged-app.cjs"
+  },
+  "overrides": {
+    "global-agent": "4.1.3"
   }
 }

@@ -1,10 +1,10 @@
 # FastGC WhatsApp
 
-基于 Electron 的 Windows 多账号 WhatsApp 客服工作台。当前版本：**1.0.34**。
+基于 Electron 的 Windows 多账号 WhatsApp 客服工作台。当前版本：**1.0.35**。
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/wangchaozhuanyong/WhatsAppFASTGC/releases/latest) 下载 `FastGC WhatsApp-Setup-1.0.34.exe`，安装后使用桌面 FastGC WhatsApp 快捷方式。
+从 [GitHub Releases](https://github.com/wangchaozhuanyong/WhatsAppFASTGC/releases/latest) 下载 `FastGC WhatsApp-Setup-1.0.35.exe`，安装后使用桌面 FastGC WhatsApp 快捷方式。
 
 安装包不包含账号、聊天记录、管理员密码或翻译密钥。升级保留本机数据；首次使用需要关联自己的 WhatsApp 账号。
 
@@ -44,3 +44,5 @@ npx electron-builder --win nsis --publish never --config.forceCodeSigning=false 
 
 生产依赖扫描、有限时长的多席位观察及真实发送结果，以对应版本 Release 中的验收说明为准。有限测试不能保证任意数量账号的长期稳定性。
 
+
+1.0.35 补充：仅初始化实际使用的浏览器会话；退出前刷新存储并关闭连接，刷新和连接等待均有上限；合并 WhatsApp 与翻译请求头监听，避免互相覆盖；构建依赖覆盖到 global-agent 4.1.3，移除 sprintf-js 告警链。

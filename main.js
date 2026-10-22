@@ -7,6 +7,7 @@ const { pathToFileURL } = require('url');
 const { createCloudTranslation } = require('./cloud-translation');
 const { validateDataTarget, migrateDataRootSync } = require('./data-root-migration');
 const { armWindowsShutdownGuard } = require('./shutdown-guard');
+const { drainSessionsForExit } = require('./shutdown-flow');
 
 /** 与 package.json build.appId 一致：任务栏分组、快捷方式关联、单实例锁 */
 const APP_ID = 'com.fastgc.whatsapp.shell';
@@ -726,7 +727,10 @@ function normalizeOpenExternalUrl(raw) {
   }
 }
 
+const activeBrowserSessions = new Set();
 function attachWhatsAppPartitionBehavior(ses) {
+  if (!ses || activeBrowserSessions.has(ses)) return;
+  activeBrowserSessions.add(ses);
   const ua = chromeLikeUserAgent();
   const chromeMajor = (process.versions.chrome || '131').split('.')[0];
   const secChUa = `"Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}", "Not-A.Brand";v="24"`;
@@ -745,7 +749,7 @@ function attachWhatsAppPartitionBehavior(ses) {
   } catch (_) {}
   // 部分环境下仅靠 setUserAgent 仍会在请求里带上 Electron；对 WhatsApp 相关域强制标准 Chrome UA
   const filter = {
-    urls: ['*://web.whatsapp.com/*', '*://*.whatsapp.net/*', '*://*.whatsapp.com/*'],
+    urls: ['*://web.whatsapp.com/*', '*://*.whatsapp.net/*', '*://*.whatsapp.com/*', '*://translate.googleapis.com/*'],
   };
   ses.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
     const headers = {
@@ -758,19 +762,8 @@ function attachWhatsAppPartitionBehavior(ses) {
     };
     callback({ requestHeaders: headers });
   });
-  // 页面内翻译兜底会请求 translate.googleapis.com；与 WhatsApp 页同源策略无关，但需标准浏览器 UA，否则易被拒答
-  const filterTranslate = { urls: ['*://translate.googleapis.com/*'] };
-  ses.webRequest.onBeforeSendHeaders(filterTranslate, (details, callback) => {
-    const headers = {
-      ...details.requestHeaders,
-      'User-Agent': ua,
-      'Sec-CH-UA': secChUa,
-      'Sec-CH-UA-Mobile': '?0',
-      'Sec-CH-UA-Platform': '"Windows"',
-      'Accept-Language': acceptLanguageForWhatsApp(),
-    };
-    callback({ requestHeaders: headers });
-  });
+  // Electron uses only the last listener for a webRequest event. Keep WhatsApp
+  // and translation in one filter so neither policy overwrites the other.
   ses.webRequest.onBeforeRequest((details, callback) => {
     try {
       const type = String(details.resourceType || '');
@@ -1355,6 +1348,7 @@ ipcMain.handle('app:get-diagnostics-snapshot', async () => {
     sqliteMigrationDone,
     sqliteMigratedKeysCount: sqliteMigratedKeys.length,
     sqliteMigrationTrackedCount: SQLITE_MIGRATION_TRACKED_KEYS.length,
+    activeSessionCount: activeBrowserSessions.size,
   };
 });
 
@@ -1664,10 +1658,6 @@ app.whenReady().then(() => {
   }
   appUiLocale = readUiLocaleSync();
   attachWhatsAppPartitionBehavior(session.fromPartition(WINDOW_PARTITION));
-  const seatCount = getEffectiveSeatCount();
-  for (let i = 1; i <= seatCount; i++) {
-    attachWhatsAppPartitionBehavior(session.fromPartition(`${WA_SEAT_PARTITION_PREFIX}${i}`));
-  }
   app.on('web-contents-created', (_event, contents) => {
     /** 仅 WA 内嵌 <webview> 的 guest：勿绑到主窗口 file:// 壳，否则 window.open/跳转误命中会把整壳 loadURL 成 WhatsApp 全页，看起来像卡住退不出 */
     try {
@@ -1675,6 +1665,7 @@ app.whenReady().then(() => {
     } catch (_) {
       return;
     }
+    attachWhatsAppPartitionBehavior(contents.session);
     bindExternalOpenForContents(contents);
   });
   createWindow();
@@ -1722,15 +1713,8 @@ app.on('window-all-closed', () => {
     const storage = releaseStorageForExit();
     if (!storage.ok) throw new Error('Storage flush failed: ' + storage.errors.join('; '));
     // Guests have unloaded; persist session cookies before arming any exit guard.
-    const partitions = [WINDOW_PARTITION];
-    for (let i=1; i<=getEffectiveSeatCount(); i++) partitions.push(`${WA_SEAT_PARTITION_PREFIX}${i}`);
-    const flushes = await Promise.allSettled(partitions.map(async partition => {
-      const currentSession = session.fromPartition(partition);
-      currentSession.flushStorageData();
-      await currentSession.cookies.flushStore();
-    }));
-    if (flushes.some(result => result.status !== 'fulfilled')) throw new Error('Session flush failed');
-    writeDiagnosticLog('shutdown-storage-flushed', { partitions: partitions.length });
+    const drained = await drainSessionsForExit(activeBrowserSessions);
+    writeDiagnosticLog('shutdown-storage-flushed', drained);
     try {
       const guard = await armWindowsShutdownGuard({ logFile: diagnosticLogPath() });
       writeDiagnosticLog('shutdown-guard-armed', guard);

@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8');
+const start=source.indexOf('function attachWhatsAppPartitionBehavior(ses) {');
+const end=source.indexOf('\n/** 与 index.html normalizePhone',start);
+assert.ok(start>=0&&end>start);
+const hooks=[],activeBrowserSessions=new Set();
+const ses={setUserAgent(){},setPermissionRequestHandler(){},setPermissionCheckHandler(){},webRequest:{onBeforeSendHeaders(filter,fn){hooks.push({filter,fn})},onBeforeRequest(){}}};
+const sandbox={activeBrowserSessions,process:{versions:{chrome:'156.0.0.0'}},chromeLikeUserAgent:()=> 'Chrome/156.0.0.0',acceptLanguageForWhatsApp:()=> 'en-US',isWhatsAppEmbeddedNavigationUrl:()=>true};
+vm.createContext(sandbox);vm.runInContext(source.slice(start,end),sandbox);
+sandbox.attachWhatsAppPartitionBehavior(ses);sandbox.attachWhatsAppPartitionBehavior(ses);
+assert.equal(hooks.length,1);assert.equal(activeBrowserSessions.size,1);
+assert.ok(hooks[0].filter.urls.includes('*://web.whatsapp.com/*'));
+assert.ok(hooks[0].filter.urls.includes('*://translate.googleapis.com/*'));
+let result;hooks[0].fn({requestHeaders:{'User-Agent':'stale-UA'}},value=>result=value);
+assert.equal(result.requestHeaders['User-Agent'],'Chrome/156.0.0.0');
+assert.equal(result.requestHeaders['Accept-Language'],'en-US');
+assert.ok(!source.includes('for (let i = 1; i <= seatCount; i++)'));
+console.log(JSON.stringify({passed:true,singleHeaderListener:true,whatsAppAndTranslateCovered:true,sessionConfiguredOnce:true,unusedSeatsNotPrecreated:true}));
