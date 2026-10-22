@@ -1716,7 +1716,10 @@ app.on('window-all-closed', () => {
       const guard = await armWindowsShutdownGuard({ logFile: diagnosticLogPath() });
       writeDiagnosticLog('shutdown-guard-armed', guard);
     } catch (error) { writeDiagnosticLog('shutdown-guard-unavailable', { message: String(error.message || error) }); }
-    app.quit();
+    // All windows are already closed and every persistence operation completed.
+    // Avoid a second Chromium quit negotiation with destroyed webview guests.
+    // app.exit skips quit hooks; releaseStorageForExit ran above before this point.
+    app.exit(0);
   })().catch(error => {
     finalExitStarted = false;
     writeDiagnosticLog('shutdown-flush-failed', { message: String(error.message || error) });
