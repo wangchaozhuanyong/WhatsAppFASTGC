@@ -40,7 +40,7 @@
       },
     };
   }
-  function createClient(bridge, legacyFactory, onError = () => {}) {
+  function createClient(bridge, legacyFactory, onError = () => {}, onSaved = () => {}) {
     let state = bridge.uiStorageSnapshotSync();
     const fail = () => { onError(); throw new Error('UI_STORAGE_UNAVAILABLE'); };
     if (!state?.ok) return fail();
@@ -68,12 +68,14 @@
         if (values.has(key) && values.get(key) === value) return;
         if (!isKey(key) || !bridge.uiStorageMutateSync(key, value, false)?.ok) return fail();
         values.set(key, value);
+        try { onSaved(); } catch (_) {}
       },
       removeItem(key) {
         key = String(key);
         if (retiredKeys.includes(key) || !values.has(key)) return;
         if (!bridge.uiStorageMutateSync(key, '', true)?.ok) return fail();
         values.delete(key);
+        try { onSaved(); } catch (_) {}
       },
     };
   }

@@ -8,11 +8,13 @@ const bridge={uiStorageSnapshotSync:()=>backend.snapshot(),uiStorageMigrateSync:
 const values=new Map([['fastgc_script_quick_en','[{"content":"preserved"}]'],['fastgc_script_quick_zh','[]'],['fastgc_global_inbox','stale legacy'],['unrelated_site_data','private'],['fastgc_api_config','obsolete']]);
 const legacy={get length(){return values.size},key:i=>[...values.keys()][i],getItem:k=>values.get(k)??null,removeItem:k=>values.delete(k)};
 assert.equal(backend.mutate('fastgc_global_inbox','',false).ok,true);
-const first=createClient(bridge,()=>legacy);
+let saved=0;
+const first=createClient(bridge,()=>legacy,()=>{},()=>saved++);
 assert.equal(first.migratedNow,true);assert.equal(first.getItem('fastgc_script_quick_en'),'[{"content":"preserved"}]');assert.equal(first.getItem('fastgc_script_quick_zh'),'[]');
 assert.equal(first.getItem('fastgc_global_inbox'),'','empty SQLite value must not resurrect legacy data');
 assert.equal(first.getItem('unrelated_site_data'),null);assert.equal(values.has('fastgc_api_config'),false);assert.equal(values.has('unrelated_site_data'),true);
 first.setItem('fastgc_script_quick_en','[]');first.setItem('fastgc_ui_lang','en');first.removeItem('fastgc_global_inbox');
+assert.equal(saved,3,'each successful mutation resets the shared failure notification');
 assert.equal(first.getItem('fastgc_global_inbox'),null);
 let legacyTouched=false;
 const second=createClient(bridge,()=>{legacyTouched=true;throw Error('Legacy DOMStorage must not open after migration')});

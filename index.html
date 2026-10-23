@@ -145,7 +145,7 @@
             setTimeout(() => window.alert('数据保存失败。请保留当前窗口，并检查磁盘空间和数据目录权限。\nData could not be saved. Keep this window open and check disk space and permissions.'), 0);
         };
         const appStorage = window.fastgcBridge
-            ? window.FastgcUiStorage.createClient(window.fastgcBridge, () => window.localStorage, notifyStorageFailure)
+            ? window.FastgcUiStorage.createClient(window.fastgcBridge, () => window.localStorage, notifyStorageFailure, () => { storageErrorShown = false; })
             : window.localStorage;
         window.__FASTGC_UI_STORAGE__ = { migratedNow: appStorage.migratedNow === true };
         try {
@@ -13396,7 +13396,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                         if (!bridge?.getUiLocale || !bridge?.setUiLocale) return;
                         const prev = await bridge.getUiLocale();
                         if (cancelled) return;
-                        await bridge.setUiLocale(lang);
+                        const savedLocale = await bridge.setUiLocale(lang);
+                        if (!savedLocale?.ok) { notifyStorageFailure(); return; }
                         try {
                             appStorage.setItem(UI_LANG_KEY, lang);
                         } catch (_) {}

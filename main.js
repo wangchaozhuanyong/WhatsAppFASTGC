@@ -679,6 +679,7 @@ function readUiLocaleSync() {
 function writeUiLocaleSync(locale) {
   const next = locale === 'en' ? 'en' : 'zh';
   const p = path.join(app.getPath('userData'), UI_LOCALE_FILE);
+  if (fs.existsSync(p) && fs.readFileSync(p, 'utf8') === next) return next;
   writeTextDurably(p, next);
   return next;
 }
