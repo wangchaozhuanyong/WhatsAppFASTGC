@@ -20,4 +20,8 @@ async function drainSessionsForExit(sessions, { flushTimeoutMs = 10000, connecti
   return { sessionCount: active.length, connectionsClosed: connections.filter(result => result.status === 'fulfilled').length, connectionWarnings: connections.filter(result => result.status !== 'fulfilled').length };
 }
 
-module.exports = { drainSessionsForExit };
+async function settlePendingRequests(promises, { timeoutMs = 1500 } = {}) {
+  try { await withDeadline(Promise.allSettled(promises), timeoutMs, 'REQUEST_SETTLE_TIMEOUT'); return { completed: true }; }
+  catch (_) { return { completed: false }; }
+}
+module.exports = { drainSessionsForExit, settlePendingRequests };

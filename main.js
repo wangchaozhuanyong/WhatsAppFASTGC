@@ -7,8 +7,9 @@ const { pathToFileURL } = require('url');
 const { createCloudTranslation } = require('./cloud-translation');
 const { validateDataTarget, migrateDataRootSync } = require('./data-root-migration');
 const { armWindowsShutdownGuard } = require('./shutdown-guard');
-const { drainSessionsForExit } = require('./shutdown-flow');
+const { drainSessionsForExit, settlePendingRequests } = require('./shutdown-flow');
 const { createBackend: createUiStorageBackend } = require('./ui-storage');
+const { writeTextDurably, writeJsonDurably } = require('./durable-json');
 
 /** 与 package.json build.appId 一致：任务栏分组、快捷方式关联、单实例锁 */
 const APP_ID = 'com.fastgc.whatsapp.shell';
@@ -89,6 +90,7 @@ let updateListenersAttached = false;
 let taskbarUnreadCount = 0;
 let storageDb = null;
 let storageDbReady = false;
+let storageDbRetryAfter = 0;
 
 function storageDbPath() {
   return path.join(app.getPath('userData'), APP_STORAGE_DB_FILE);
@@ -96,11 +98,12 @@ function storageDbPath() {
 
 function getStorageDb() {
   if (storageDbReady) return storageDb;
-  storageDbReady = true;
+  if (Date.now() < storageDbRetryAfter) return null;
+  let opened;
   try {
     const { DatabaseSync } = require('node:sqlite');
     fs.mkdirSync(path.dirname(storageDbPath()), { recursive: true });
-    const db = new DatabaseSync(storageDbPath());
+    const db = opened = new DatabaseSync(storageDbPath());
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 3000;');
     db.exec(`
       CREATE TABLE IF NOT EXISTS app_kv (
@@ -110,8 +113,13 @@ function getStorageDb() {
       );
     `);
     storageDb = db;
+    storageDbReady = true;
+    storageDbRetryAfter = 0;
   } catch (error) {
+    try { opened?.close(); } catch (_) {}
     storageDb = null;
+    storageDbReady = false;
+    storageDbRetryAfter = Date.now() + 3000;
     writeDiagnosticLog('storage-open-failed', { message: String(error.message || error) });
   }
   return storageDb;
@@ -235,8 +243,10 @@ function bootstrapConfigPath() {
 }
 
 function normalizeDataRoot(rawPath) {
+  if (typeof rawPath !== 'string') return '';
   const p = String(rawPath || '').trim();
   if (!p) return '';
+  if (!path.isAbsolute(p)) return '';
   try {
     return path.resolve(p);
   } catch (_) {
@@ -249,9 +259,13 @@ function readBootstrapConfigSync() {
     const p = bootstrapConfigPath();
     if (!fs.existsSync(p)) return { dataRoot: '' };
     const raw = JSON.parse(fs.readFileSync(p, 'utf8') || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('BOOTSTRAP_CONFIG_INVALID');
+    for (const key of ['dataRoot', 'pendingDataRoot']) {
+      if (raw[key] !== undefined && (typeof raw[key] !== 'string' || (raw[key].trim() && !normalizeDataRoot(raw[key])))) throw new Error('BOOTSTRAP_PATH_INVALID');
+    }
     return { dataRoot: normalizeDataRoot(raw.dataRoot), pendingDataRoot: normalizeDataRoot(raw.pendingDataRoot) };
   } catch (_) {
-    return { dataRoot: '' };
+    return { dataRoot: '', error: 'BOOTSTRAP_CONFIG_UNREADABLE' };
   }
 }
 
@@ -259,8 +273,7 @@ function writeBootstrapConfigSync(payload = {}) {
   const dataRoot = normalizeDataRoot(payload.dataRoot);
   const data = { dataRoot, pendingDataRoot: normalizeDataRoot(payload.pendingDataRoot) };
   try {
-    fs.writeFileSync(bootstrapConfigPath(), JSON.stringify(data, null, 2), 'utf8');
-    if (fs.readFileSync(bootstrapConfigPath(), 'utf8') !== JSON.stringify(data, null, 2)) throw new Error('BOOTSTRAP_VERIFY_FAILED');
+    writeJsonDurably(bootstrapConfigPath(), data);
   } catch (error) { return { ok: false, error: String(error.message || error) }; }
   return { ok: true, ...data };
 }
@@ -283,7 +296,7 @@ if (bootstrapConfig.dataRoot) {
   try {
     fs.mkdirSync(bootstrapConfig.dataRoot, { recursive: true });
     app.setPath('userData', path.join(bootstrapConfig.dataRoot, 'fastgc-whatsapp-userdata'));
-  } catch (_) {}
+  } catch (_) { bootstrapConfig.error = 'DATA_DIRECTORY_UNAVAILABLE'; }
 }
 
 const cloudTranslation = createCloudTranslation({ userDataDir: () => app.getPath('userData'), safeStorage, fetchImpl: (...args) => fetch(...args) });
@@ -308,6 +321,7 @@ const FASTGC_TRANSLATE_PERSIST_MAX = 4000;
 const FASTGC_TRANSLATE_PERSIST_FILE = 'fastgc-translate-cache.json';
 let fastgcTranslatePersistLoaded = false;
 let fastgcTranslatePersistWriteTimer = null;
+let fastgcTranslatePersistRetryMs = 1200;
 let fastgcTranslatePersistDirty = false;
 /** key -> { text: string, lastHitAt: number } */
 const fastgcTranslatePersistMap = new Map();
@@ -345,18 +359,23 @@ function fastgcTranslatePersistScheduleWrite() {
   fastgcTranslatePersistWriteTimer = setTimeout(() => {
     fastgcTranslatePersistWriteTimer = null;
     if (!fastgcTranslatePersistDirty) return;
-    fastgcTranslatePersistDirty = false;
     const p = fastgcTranslatePersistPath();
     if (!p) return;
     try {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
       const arr = Array.from(fastgcTranslatePersistMap.entries())
         .sort((a, b) => (Number(b[1]?.lastHitAt || 0) - Number(a[1]?.lastHitAt || 0)))
         .slice(0, FASTGC_TRANSLATE_PERSIST_MAX)
         .map(([k, v]) => [k, String(v.text || ''), Number(v.lastHitAt || 0)]);
-      fs.writeFileSync(p, JSON.stringify({ v: 1, entries: arr }, null, 0), 'utf8');
-    } catch (_) {}
-  }, 1200);
+      writeJsonDurably(p, { v: 1, entries: arr });
+      fastgcTranslatePersistDirty = false;
+      fastgcTranslatePersistRetryMs = 1200;
+    } catch (error) {
+      writeDiagnosticLog('translation-cache-save-failed', { message: String(error.message || error) });
+      fastgcTranslatePersistRetryMs = Math.min(60000, fastgcTranslatePersistRetryMs * 2);
+      fastgcTranslatePersistScheduleWrite();
+    }
+  }, fastgcTranslatePersistRetryMs);
+  fastgcTranslatePersistWriteTimer.unref();
 }
 
 function fastgcTranslateCacheKey(sourceLang, targetLang, normalizedText) {
@@ -408,6 +427,7 @@ function fastgcTranslatePersistGet(key) {
 
 /** 同 cacheKey 并发 `fastgc:google-translate` 合并为单次网络（多席位/多路同时译同句） */
 const inflightGoogleTranslateByKey = new Map();
+const webTranslationControllers = new Set();
 
 function clearFastgcTranslateCaches() {
   try {
@@ -495,6 +515,7 @@ function delay(ms) {
 
 async function fetchGoogleTranslateOnce(url, timeoutMs) {
   const controller = new AbortController();
+  webTranslationControllers.add(controller);
   const timer = setTimeout(() => controller.abort(), Math.max(3000, Number(timeoutMs) || 12000));
   try {
     const response = await fetch(url, {
@@ -529,6 +550,7 @@ async function fetchGoogleTranslateOnce(url, timeoutMs) {
     return { ok: false, error: message || 'FETCH_ERROR', status: 0, raw: '' };
   } finally {
     clearTimeout(timer);
+    webTranslationControllers.delete(controller);
   }
 }
 
@@ -540,6 +562,7 @@ async function requestGoogleTranslateWithRetry(sourceLang, targetLang, normalize
   const urls = buildGoogleTranslateUrls(sourceLang, targetLang, normalizedText);
   let last = { ok: false, error: 'NO_ATTEMPT', status: 0, raw: '' };
   for (let attempt = 0; attempt < urls.length; attempt += 1) {
+    if (finalExitStarted) return { ok: false, error: 'APP_CLOSING', noFallback: true };
     const r = await fetchGoogleTranslateOnce(urls[attempt], 7000);
     if (r.ok) return { ...r, attempt: attempt + 1 };
     last = r;
@@ -557,19 +580,23 @@ function readAccessControlRawSync() {
     const p = path.join(app.getPath('userData'), ACCESS_CONTROL_FILE);
     if (!fs.existsSync(p)) return { enabled: false, allowIps: [], adminPasswordHash: '' };
     const raw = JSON.parse(fs.readFileSync(p, 'utf8') || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('ACCESS_CONFIG_INVALID');
+    if ((raw.enabled !== undefined && typeof raw.enabled !== 'boolean') || (raw.allowIps !== undefined && !Array.isArray(raw.allowIps)) || (raw.adminPasswordHash !== undefined && typeof raw.adminPasswordHash !== 'string')) throw new Error('ACCESS_CONFIG_INVALID');
     const enabled = Boolean(raw.enabled);
     const allowIps = Array.isArray(raw.allowIps)
       ? raw.allowIps.map((x) => String(x || '').trim()).filter(Boolean)
       : [];
     const adminPasswordHash = String(raw.adminPasswordHash || '').trim();
+    if (adminPasswordHash && !/^[a-f0-9]{64}$/i.test(adminPasswordHash)) throw new Error('ACCESS_PASSWORD_HASH_INVALID');
     return { enabled, allowIps, adminPasswordHash };
   } catch (_) {
-    return { enabled: false, allowIps: [], adminPasswordHash: '' };
+    return { enabled: true, allowIps: [], adminPasswordHash: '', error: 'ACCESS_CONFIG_UNREADABLE' };
   }
 }
 
 function writeAccessControlSync(payload = {}) {
   const current = readAccessControlRawSync();
+  if (current.error) return { ok: false, error: current.error };
   const enabled = Boolean(payload.enabled);
   const allowIps = Array.isArray(payload.allowIps)
     ? payload.allowIps.map((x) => String(x || '').trim()).filter(Boolean)
@@ -583,8 +610,7 @@ function writeAccessControlSync(payload = {}) {
   const data = { enabled, allowIps, adminPasswordHash };
   try {
     const p = path.join(app.getPath('userData'), ACCESS_CONTROL_FILE);
-    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
-    if (fs.readFileSync(p, 'utf8') !== JSON.stringify(data, null, 2)) throw new Error('ACCESS_CONFIG_VERIFY_FAILED');
+    writeJsonDurably(p, data);
   } catch (error) { return { ok: false, error: String(error.message || error) }; }
   return { ok: true, enabled, allowIps, hasPassword: Boolean(adminPasswordHash) };
 }
@@ -628,6 +654,7 @@ function isEntryMatched(ip, entry) {
 }
 
 function isIpAllowedByPolicy(policy) {
+  if (policy?.error) return false;
   if (!policy || !policy.enabled) return true;
   const allowIps = Array.isArray(policy.allowIps) ? policy.allowIps : [];
   if (!allowIps.length) return true;
@@ -651,10 +678,8 @@ function readUiLocaleSync() {
 
 function writeUiLocaleSync(locale) {
   const next = locale === 'en' ? 'en' : 'zh';
-  try {
-    const p = path.join(app.getPath('userData'), UI_LOCALE_FILE);
-    fs.writeFileSync(p, next, 'utf8');
-  } catch (_) {}
+  const p = path.join(app.getPath('userData'), UI_LOCALE_FILE);
+  writeTextDurably(p, next);
   return next;
 }
 
@@ -697,9 +722,9 @@ function readSeatConfigSync() {
 function writeSeatConfigSync(payload = {}) {
   const data = { seatCount: normalizeSeatCount(payload.seatCount) };
   try {
-    fs.writeFileSync(path.join(app.getPath('userData'), SEAT_CONFIG_FILE), JSON.stringify(data, null, 2), 'utf8');
-  } catch (_) {}
-  return data;
+    writeJsonDurably(path.join(app.getPath('userData'), SEAT_CONFIG_FILE), data);
+  } catch (_) { return { ok: false, error: 'SEAT_CONFIG_SAVE_FAILED' }; }
+  return { ok: true, ...data };
 }
 
 function getEffectiveSeatCount() {
@@ -881,6 +906,7 @@ ipcMain.handle('app:check-cloud-translation', async event => {
 });
 
 ipcMain.handle('fastgc:google-translate', async (_event, payload = {}) => {
+  if (finalExitStarted) return { ok: false, error: 'APP_CLOSING', noFallback: true };
   const policy = cloudTranslation.getPolicy();
   if (!policy.ok) return { ok: false, error: policy.error, noFallback: true };
   const official = policy.provider === 'google-cloud-nmt';
@@ -910,6 +936,7 @@ ipcMain.handle('fastgc:google-translate', async (_event, payload = {}) => {
       const result = official
         ? await cloudTranslation.translate(normalized, sourceLang, targetLang)
         : await requestGoogleTranslateWithRetry(sourceLang, targetLang, normalized);
+      if (finalExitStarted) return { ok: false, error: 'APP_CLOSING', noFallback: true };
       if (!result.ok) {
         return {
           ok: false,
@@ -935,20 +962,22 @@ ipcMain.handle('fastgc:google-translate', async (_event, payload = {}) => {
   return job;
 });
 
-ipcMain.handle('app:set-ui-locale', (_event, locale) => {
-  appUiLocale = writeUiLocaleSync(locale);
-  return { ok: true, locale: appUiLocale };
+ipcMain.handle('app:set-ui-locale', (event, locale) => {
+  if (!isTranslationSettingsHost(event)) return { ok: false, error: 'FORBIDDEN' };
+  try { appUiLocale = writeUiLocaleSync(locale); return { ok: true, locale: appUiLocale }; }
+  catch (_) { return { ok: false, error: 'UI_LOCALE_SAVE_FAILED' }; }
 });
 
 ipcMain.handle('app:get-ui-locale', () => appUiLocale);
 ipcMain.handle('app:get-access-control', () => {
   const raw = readAccessControlRawSync();
-  return { enabled: raw.enabled, allowIps: raw.allowIps, hasPassword: Boolean(raw.adminPasswordHash) };
+  return { enabled: raw.enabled, allowIps: raw.allowIps, hasPassword: Boolean(raw.adminPasswordHash), error: raw.error || '' };
 });
 const adminGrants = new Map();
 function isAdminAuthorized(event) {
   if (!isTranslationSettingsHost(event)) return false;
   const current = readAccessControlRawSync();
+  if (current.error) return false;
   if (!current.adminPasswordHash) return true;
   const grant = adminGrants.get(event.sender.id);
   return Boolean(grant && grant.hash === current.adminPasswordHash && grant.expires > Date.now());
@@ -962,6 +991,7 @@ ipcMain.handle('app:set-access-control', (event, payload) => {
 ipcMain.handle('app:verify-access-password', (event, password) => {
   if (!isTranslationSettingsHost(event)) return { ok: false, verified: false, error: 'FORBIDDEN' };
   const raw = readAccessControlRawSync();
+  if (raw.error) return { ok: false, verified: false, error: raw.error };
   const hash = String(raw.adminPasswordHash || '');
   if (!hash) return { ok: true, verified: true, hasPassword: false };
   const provided = sha256(String(password || '').trim());
@@ -1034,8 +1064,7 @@ function writeUpdateFeedSync(payload = {}) {
   const baseUrl = normalizeUpdateBaseUrl(payload.baseUrl);
   const data = { baseUrl };
   try {
-    fs.writeFileSync(path.join(app.getPath('userData'), UPDATE_FEED_FILE), JSON.stringify(data, null, 2), 'utf8');
-    if (fs.readFileSync(path.join(app.getPath('userData'), UPDATE_FEED_FILE), 'utf8') !== JSON.stringify(data, null, 2)) throw new Error('UPDATE_CONFIG_VERIFY_FAILED');
+    writeJsonDurably(path.join(app.getPath('userData'), UPDATE_FEED_FILE), data);
   } catch (error) { return { ok: false, error: String(error.message || error) }; }
   return { ok: true, ...data };
 }
@@ -1173,9 +1202,10 @@ ipcMain.on('app:get-seat-config-sync', (event) => {
   event.returnValue = { seatCount: getEffectiveSeatCount() };
 });
 ipcMain.handle('app:get-seat-config', () => readSeatConfigSync());
-ipcMain.handle('app:set-seat-config', (_event, payload = {}) => {
+ipcMain.handle('app:set-seat-config', (event, payload = {}) => {
+  if (!isTranslationSettingsHost(event)) return { ok: false, error: 'FORBIDDEN' };
   if (!isPlainObject(payload)) return { ok: false, error: 'INVALID_PAYLOAD' };
-  return { ok: true, ...writeSeatConfigSync(payload) };
+  return writeSeatConfigSync(payload);
 });
 
 const isStorageKey = key => [...SQLITE_MIGRATION_TRACKED_KEYS, SQLITE_MIGRATION_MARK_KEY].includes(key);
@@ -1439,7 +1469,7 @@ function createWindow() {
       <body style="margin:0;background:#fff;color:#111;font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
         <div style="text-align:center;opacity:.72;">
           <div style="font-size:16px;font-weight:700;margin-bottom:8px;">访问受限</div>
-          <div style="font-size:12px;">当前设备 IP 不在白名单内</div>
+          <div style="font-size:12px;">${accessPolicy.error ? '访问权限配置无法读取，已保留限制。请检查配置文件和数据目录权限。' : '当前设备 IP 不在白名单内'}</div>
         </div>
       </body></html>`;
     win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(blockedHtml)}`);
@@ -1623,6 +1653,11 @@ function bindExternalOpenForContents(contents) {
 }
 
 app.whenReady().then(() => {
+  if (bootstrapConfig.error) {
+    dialog.showErrorBox('FastGC WhatsApp', '数据目录配置无法读取，已停止启动以避免打开错误的账号目录。请修复配置文件：\n' + bootstrapConfigPath());
+    app.exit(1);
+    return;
+  }
   if (dataMigrationError) {
     dialog.showMessageBoxSync({ type: 'warning', title: 'FastGC WhatsApp', message: '数据目录迁移未完成，继续使用原目录。\nData migration failed; the original directory is still in use.', detail: dataMigrationError });
   }
@@ -1699,11 +1734,7 @@ function releaseStorageForExit() {
         .sort((a,b) => b[1].lastHitAt - a[1].lastHitAt)
         .slice(0, FASTGC_TRANSLATE_PERSIST_MAX)
         .map(([key,value]) => [key,value.text,value.lastHitAt]);
-      const descriptor = fs.openSync(fastgcTranslatePersistPath(), 'w');
-      try {
-        fs.writeFileSync(descriptor, JSON.stringify({v:1,entries}), 'utf8');
-        fs.fsyncSync(descriptor);
-      } finally { fs.closeSync(descriptor); }
+      writeJsonDurably(fastgcTranslatePersistPath(), { v: 1, entries });
       fastgcTranslatePersistDirty = false;
     } catch (error) { errors.push(String(error.message || error)); }
   }
@@ -1728,6 +1759,12 @@ app.on('window-all-closed', () => {
   if (process.platform === 'darwin' || finalExitStarted) return;
   finalExitStarted = true;
   void (async () => {
+    const pending = [...inflightGoogleTranslateByKey.values()];
+    const cancelledCloud = cloudTranslation.cancelPending();
+    const cancelledWeb = webTranslationControllers.size;
+    for (const controller of webTranslationControllers) controller.abort();
+    await settlePendingRequests(pending);
+    writeDiagnosticLog('shutdown-requests-settled', { cancelledCloud, cancelledWeb, pendingTranslations: inflightGoogleTranslateByKey.size, activeResourceTypes: process.getActiveResourcesInfo?.() || [] });
     const storage = releaseStorageForExit();
     if (!storage.ok) throw new Error('Storage flush failed: ' + storage.errors.join('; '));
     // Guests have unloaded; persist session cookies before arming any exit guard.

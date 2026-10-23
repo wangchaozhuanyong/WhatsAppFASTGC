@@ -2,6 +2,7 @@
 // Credentials stay in the main process and are encrypted by the operating system.
 const fs = require('fs');
 const path = require('path');
+const { writeJsonDurably } = require('./durable-json');
 
 const CONFIG_FILE = 'fastgc-cloud-translation.json';
 const USAGE_FILE = 'fastgc-cloud-translation-usage.json';
@@ -11,26 +12,12 @@ const DEFAULT_LIMIT = 450000;
 
 function createCloudTranslation({ userDataDir, safeStorage, fetchImpl }) {
   let config;
+  const controllers = new Set();
   const filePath = name => path.join(userDataDir(), name);
   const failure = error => ({ ok: false, error, provider: 'google-cloud-nmt', noFallback: true });
   const writeJson = (name, value) => {
     const file = filePath(name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const text = JSON.stringify(value);
-    const temporary = `${file}.tmp`;
-    fs.writeFileSync(temporary, text, { mode: 0o600 });
-    try {
-      fs.renameSync(temporary, file);
-    } catch (error) {
-      // Some Windows encrypted/redirected data directories return EXDEV even
-      // for two names in the same directory. Keep encryption and copy instead.
-      if (error.code !== 'EXDEV') throw error;
-      fs.copyFileSync(temporary, file);
-      const descriptor = fs.openSync(file, 'r+');
-      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-      if (fs.readFileSync(file, 'utf8') !== text) throw new Error('SAVE_VERIFICATION_FAILED');
-      try { fs.unlinkSync(temporary); } catch (_) {}
-    }
+    writeJsonDurably(file, value);
   };
   const readConfig = () => {
     if (config) return config;
@@ -134,6 +121,7 @@ function createCloudTranslation({ userDataDir, safeStorage, fetchImpl }) {
     try { if (!reserveCharacters(count)) return failure('CLOUD_LOCAL_LIMIT_REACHED'); }
     catch (_) { return failure('CLOUD_USAGE_UNREADABLE'); }
     const controller = new AbortController();
+    controllers.add(controller);
     const timer = setTimeout(() => controller.abort(), 18000);
     try {
       const response = await fetchImpl('https://translation.googleapis.com/language/translate/v2', {
@@ -154,9 +142,10 @@ function createCloudTranslation({ userDataDir, safeStorage, fetchImpl }) {
       if (typeof out !== 'string' || !out.trim()) return failure('CLOUD_EMPTY_RESPONSE');
       return { ok: true, text: out, provider: 'google-cloud-nmt', noFallback: true, characters: count };
     } catch (_) { return failure('CLOUD_NETWORK_OR_TIMEOUT'); }
-    finally { clearTimeout(timer); key = ''; }
+    finally { clearTimeout(timer); controllers.delete(controller); key = ''; }
   };
-  return { getPolicy, getStatus, saveConfig, translate };
+  const cancelPending = () => { const count = controllers.size; for (const controller of controllers) controller.abort(); return count; };
+  return { getPolicy, getStatus, saveConfig, translate, cancelPending };
 }
 
 module.exports = { createCloudTranslation };

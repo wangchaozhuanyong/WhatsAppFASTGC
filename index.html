@@ -130,8 +130,9 @@
             if (!r || r.children.length) return;
             var msg = (e && e.message) ? e.message : String(e && e.error || e || 'unknown');
             r.innerHTML = '<div style="padding:24px;font-family:system-ui,sans-serif;max-width:520px;color:#b91c1c;line-height:1.5">'
-                + '<strong>界面脚本加载失败</strong><p style="margin:12px 0 0;font-size:13px;color:#444">' + msg + '</p>'
+                + '<strong>界面脚本加载失败</strong><p data-fastgc-error style="margin:12px 0 0;font-size:13px;color:#444"></p>'
                 + '<p style="margin:12px 0 0;font-size:12px;color:#64748b">若从资源管理器直接打开 index.html，请先安装依赖并运行 <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px">npm install</code> 后使用 Electron 启动。</p></div>';
+            r.querySelector('[data-fastgc-error]').textContent = msg;
         });
     </script>
 
@@ -197,19 +198,8 @@
             const k = String(key || '').trim();
             if (!k) return '';
             try {
-                const live = window.fastgcBridge?.storageGetSync?.(k);
-                if (live?.ok) {
-                    if (live.found) {
-                        FASTGC_STORAGE_SNAPSHOT[k] = String(live.value || '');
-                        return String(live.value || '');
-                    }
-                    delete FASTGC_STORAGE_SNAPSHOT[k];
-                    return String(appStorage.getItem(k) || '');
-                }
-                const fromSqlite = String(FASTGC_STORAGE_SNAPSHOT[k] || '');
-                if (fromSqlite) return fromSqlite;
-            } catch (_) {}
-            try {
+                // appStorage is the live SQLite-backed client initialized above.
+                // Its null/empty value is authoritative; never revive an old snapshot.
                 return String(appStorage.getItem(k) || '');
             } catch (_) {
                 return '';
@@ -217,13 +207,13 @@
         };
         const writeMigratedStorage = (key, value) => {
             const text = String(value == null ? '' : value);
-            let durable = false;
-            let fallback = false;
-            try { durable = window.fastgcBridge?.storageSetSync?.(key, text)?.ok === true; } catch (_) {}
-            try { appStorage.setItem(key, text); fallback = true; } catch (_) {}
-            if (durable || fallback) FASTGC_STORAGE_SNAPSHOT[key] = text;
-            if (!durable) notifyStorageFailure();
-            return durable || fallback;
+            try {
+                // One acknowledged SQLite write; the adapter updates its cache
+                // only after persistence succeeds. Do not write the same row twice.
+                appStorage.setItem(key, text);
+                FASTGC_STORAGE_SNAPSHOT[key] = text;
+                return true;
+            } catch (_) { notifyStorageFailure(); return false; }
         };
         /** 左侧「号码奖励管理」抽屉：与工具箱 PhoneManager 同源 key */
         /** 按当前会话标题/chatKey 缓存已采集号码，避免重复打开「联系人信息」抽屉 */
@@ -7525,8 +7515,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                         key,
                         value: String(appStorage.getItem(key) || ''),
                     })).filter((it) => it.value);
-                    if (items.length > 0) await bridge.storageMigrateBatch({ items });
-                    if (bridge.storageSet) await bridge.storageSet({ key: SQLITE_MIGRATION_MARK_KEY, value: '1' });
+                    const result = await bridge.storageMigrateBatch({ items });
+                    if (!result?.ok || result.saved !== items.length) throw new Error(result?.error || 'MIGRATION_FAILED');
                     try { appStorage.setItem(SQLITE_MIGRATION_MARK_KEY, '1'); } catch (_) {}
                     await refresh();
                 } catch (e) {
@@ -7814,6 +7804,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                         if (!bridge?.getAccessControl) return;
                         const ac = await bridge.getAccessControl();
                         if (canceled) return;
+                        if (ac?.error) { setAccessHasPassword(true); setAccessUnlocked(false); window.alert(ac.error); return; }
                         setAccessEnabled(Boolean(ac?.enabled));
                         setIpListInput(Array.isArray(ac?.allowIps) ? ac.allowIps.join('\n') : '');
                         setAccessHasPassword(Boolean(ac?.hasPassword));
@@ -7872,6 +7863,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                         return;
                     }
                     const result = await bridge.verifyAccessPassword(accessPasswordInput);
+                    if (result?.error) { window.alert(result.error); return; }
                     if (result?.verified) {
                         setAccessUnlocked(true);
                         setAccessPasswordInput('');
@@ -10379,10 +10371,9 @@ ${WA_INJECT_TRANSLATE_CORE}
             };
 
             useEffect(() => {
-                let cancelled = false;
                 (async () => {
                     const bridge = window.fastgcBridge;
-                    if (!bridge) return;
+                    if (!bridge || appStorage.getItem(SQLITE_MIGRATION_MARK_KEY) === '1') return;
                     try {
                         const migrateItems = SQLITE_MIGRATION_KEYS.map((key) => ({
                             key,
@@ -10394,23 +10385,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                             return;
                         }
                         try { appStorage.setItem(SQLITE_MIGRATION_MARK_KEY, '1'); } catch (_) {}
-                    } catch (_) {}
-                    try {
-                        if (!bridge.storageGet) return;
-                        for (const key of SQLITE_MIGRATION_KEYS) {
-                            if (cancelled) return;
-                            if (String(appStorage.getItem(key) || '')) continue;
-                            const r = await bridge.storageGet({ key });
-                            if (!r?.ok) { notifyStorageFailure(); continue; }
-                            const v = String(r?.value || '');
-                            if (!v) continue;
-                            appStorage.setItem(key, v);
-                        }
-                    } catch (_) {}
+                    } catch (_) { notifyStorageFailure(); }
                 })();
-                return () => {
-                    cancelled = true;
-                };
             }, []);
 
             const webviewRef = useRef(null);
