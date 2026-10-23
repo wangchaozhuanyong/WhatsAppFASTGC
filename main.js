@@ -7,7 +7,7 @@ const { pathToFileURL } = require('url');
 const { createCloudTranslation } = require('./cloud-translation');
 const { validateDataTarget, migrateDataRootSync } = require('./data-root-migration');
 const { armWindowsShutdownGuard } = require('./shutdown-guard');
-const { drainSessionsForExit } = require('./shutdown-flow');
+const { drainSessionsForExit, stopGuestWorkersForExit } = require('./shutdown-flow');
 const { createBackend: createUiStorageBackend } = require('./ui-storage');
 
 /** 与 package.json build.appId 一致：任务栏分组、快捷方式关联、单实例锁 */
@@ -1527,6 +1527,23 @@ function createWindow() {
   // Optional: open DevTools when debugging WA issues
   // win.webContents.openDevTools({ mode: 'detach' });
   applyTaskbarUnreadCount(win, taskbarUnreadCount);
+  let closePrepared = false;
+  let closePreparing = false;
+  win.on('close', event => {
+    if (closePrepared) return;
+    event.preventDefault();
+    if (closePreparing) return;
+    closePreparing = true;
+    // Stop each partition's service workers while its guest still exists.
+    // This does not clear registrations, IndexedDB, cookies, or conversations.
+    const guests = require('electron').webContents.getAllWebContents().filter(contents => {
+      try { return !contents.isDestroyed() && contents.getType() === 'webview' && contents.hostWebContents?.id === win.webContents.id; }
+      catch (_) { return false; }
+    });
+    void stopGuestWorkersForExit(guests).then(result => writeDiagnosticLog('shutdown-workers-stopped', result))
+      .catch(error => writeDiagnosticLog('shutdown-workers-stop-failed', { message: String(error.message || error) }))
+      .finally(() => { closePrepared = true; if (!win.isDestroyed()) win.close(); });
+  });
 }
 
 /**
@@ -1715,6 +1732,15 @@ function releaseStorageForExit() {
 }
 
 let finalExitStarted = false;
+app.on('before-quit', event => {
+  if (finalExitStarted) return;
+  // app.quit() does not emit window-all-closed. Route explicit quit/update exits
+  // through the same persistence barrier used by closing the last window.
+  event.preventDefault();
+  const windows = BrowserWindow.getAllWindows();
+  if (windows.length) windows.forEach(window => window.close());
+  else app.emit('window-all-closed');
+});
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin' || finalExitStarted) return;
   finalExitStarted = true;
