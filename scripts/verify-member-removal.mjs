@@ -39,7 +39,7 @@ assert.ok(cleanup);
 const untouched=['fastgc_script_quick','content_manager_data','fastgc_global_inbox','fastgc_seat_layout_v2','wa-session-marker'];
 const retired=['fastgc_api_config','fastgc_crm_right_panel_width_px','fastgc_crm_right_panel_collapsed'];
 const storage=new Map([...untouched,...retired].map(key=>[key,`saved-${key}`]));
-vm.runInNewContext(renderer.slice(cleanup.start,cleanup.end),{localStorage:{removeItem:key=>storage.delete(key)}});
+vm.runInNewContext(renderer.slice(cleanup.start,cleanup.end),{appStorage:{removeItem:key=>storage.delete(key)}});
 for(const key of retired)assert.equal(storage.has(key),false);
 for(const key of untouched)assert.equal(storage.get(key),`saved-${key}`);
 

@@ -10,6 +10,7 @@
     <script src="./node_modules/@babel/standalone/babel.min.js"></script>
     <!-- TS 编译链产出（npm run build:renderer-ts）：不迁 JSX，仅存纯逻辑 IIFE -->
     <script src="./dist/fastgc-wa-shared.js"></script>
+    <script src="./ui-storage.js"></script>
     <!-- 正式和本地运行均使用构建生成的 CSS -->
     <link rel="stylesheet" href="./dist/tailwind.css">
     <script>
@@ -136,8 +137,14 @@
 
     <script type="text/babel">
         window.performance.mark('fastgc-renderer-entry');
+        const appStorage = window.fastgcBridge
+            ? window.FastgcUiStorage.createClient(window.fastgcBridge, () => window.localStorage, () => {
+                setTimeout(() => window.alert('数据保存失败，请保留窗口并检查磁盘和目录权限。'), 0);
+            })
+            : window.localStorage;
+        window.__FASTGC_UI_STORAGE__ = { migratedNow: appStorage.migratedNow === true };
         try {
-            for (const key of ['fastgc_api_config', 'fastgc_crm_right_panel_width_px', 'fastgc_crm_right_panel_collapsed']) localStorage.removeItem(key);
+            for (const key of ['fastgc_api_config', 'fastgc_crm_right_panel_width_px', 'fastgc_crm_right_panel_collapsed']) appStorage.removeItem(key);
         } catch (_) {}
 
         window.performance.mark('fastgc-legacy-storage-cleaned');
@@ -191,15 +198,19 @@
             if (!k) return '';
             try {
                 const live = window.fastgcBridge?.storageGetSync?.(k);
-                if (live?.ok && typeof live.value === 'string' && (live.found || live.value)) {
-                    FASTGC_STORAGE_SNAPSHOT[k] = live.value;
-                    return live.value;
+                if (live?.ok) {
+                    if (live.found) {
+                        FASTGC_STORAGE_SNAPSHOT[k] = String(live.value || '');
+                        return String(live.value || '');
+                    }
+                    delete FASTGC_STORAGE_SNAPSHOT[k];
+                    return String(appStorage.getItem(k) || '');
                 }
                 const fromSqlite = String(FASTGC_STORAGE_SNAPSHOT[k] || '');
                 if (fromSqlite) return fromSqlite;
             } catch (_) {}
             try {
-                return String(localStorage.getItem(k) || '');
+                return String(appStorage.getItem(k) || '');
             } catch (_) {
                 return '';
             }
@@ -209,7 +220,7 @@
             let durable = false;
             let fallback = false;
             try { durable = window.fastgcBridge?.storageSetSync?.(key, text)?.ok === true; } catch (_) {}
-            try { localStorage.setItem(key, text); fallback = true; } catch (_) {}
+            try { appStorage.setItem(key, text); fallback = true; } catch (_) {}
             if (durable || fallback) FASTGC_STORAGE_SNAPSHOT[key] = text;
             if (!durable) notifyStorageFailure();
             return durable || fallback;
@@ -985,12 +996,12 @@
 
         function readSeatLayout() {
             try {
-                const s = localStorage.getItem(SEAT_LAYOUT_KEY);
+                const s = appStorage.getItem(SEAT_LAYOUT_KEY);
                 if (s) return normalizeSeatLayout(JSON.parse(s));
             } catch (_) {}
             let active = '1';
             try {
-                const v = localStorage.getItem('fastgc_fixed_seat');
+                const v = appStorage.getItem('fastgc_fixed_seat');
                 if (v && FIXED_SEAT_LIST.some((x) => x.id === v)) active = v;
             } catch (_) {}
             return normalizeSeatLayout({
@@ -1007,8 +1018,8 @@
         function writeSeatLayout(layout) {
             const n = normalizeSeatLayout(layout);
             try {
-                localStorage.setItem(SEAT_LAYOUT_KEY, JSON.stringify(n));
-                localStorage.setItem('fastgc_fixed_seat', n.activeSeatId);
+                appStorage.setItem(SEAT_LAYOUT_KEY, JSON.stringify(n));
+                appStorage.setItem('fastgc_fixed_seat', n.activeSeatId);
             } catch (_) {}
             return n;
         }
@@ -1121,7 +1132,7 @@
         };
         const loadWaPhoneChatKeyMap = () => {
             try {
-                const raw = localStorage.getItem(WA_PHONE_CHATKEY_CACHE_KEY);
+                const raw = appStorage.getItem(WA_PHONE_CHATKEY_CACHE_KEY);
                 const o = raw ? JSON.parse(raw) : null;
                 if (!o || typeof o !== 'object') return new Map();
                 const m = new Map();
@@ -1164,7 +1175,7 @@
                     if (nk.length >= 2) norm.set(nk, p);
                 });
                 const tail = [...norm.entries()].slice(-WA_PHONE_CHATKEY_MAX);
-                localStorage.setItem(WA_PHONE_CHATKEY_CACHE_KEY, JSON.stringify(Object.fromEntries(tail)));
+                appStorage.setItem(WA_PHONE_CHATKEY_CACHE_KEY, JSON.stringify(Object.fromEntries(tail)));
             } catch (_) {}
         };
         /** 已成功完成「联系人信息」抽屉采集并拿到号码的会话标记；每个 chatKey / 号码只自动采一次 */
@@ -1172,7 +1183,7 @@
         const WA_DRAWER_PHONE_DONE_MAX = 600;
         const loadWaDrawerPhoneDoneSet = () => {
             try {
-                const raw = localStorage.getItem(WA_DRAWER_PHONE_DONE_KEY);
+                const raw = appStorage.getItem(WA_DRAWER_PHONE_DONE_KEY);
                 const a = raw ? JSON.parse(raw) : null;
                 return new Set(Array.isArray(a) ? a.map(String).filter(Boolean) : []);
             } catch (_) {
@@ -1182,7 +1193,7 @@
         const persistWaDrawerPhoneDoneSet = (set) => {
             try {
                 const arr = [...set].slice(-WA_DRAWER_PHONE_DONE_MAX);
-                localStorage.setItem(WA_DRAWER_PHONE_DONE_KEY, JSON.stringify(arr));
+                appStorage.setItem(WA_DRAWER_PHONE_DONE_KEY, JSON.stringify(arr));
             } catch (_) {}
         };
         /** 号码最近一次「与 WA 对齐」写入时间；超过 TTL 会触发重新校验（与快照/抽屉比对） */
@@ -1194,7 +1205,7 @@
         const WA_DRAWER_TRUTH_MAP_MAX = 600;
         const loadWaPhoneVerifiedAtMap = () => {
             try {
-                const raw = localStorage.getItem(WA_PHONE_VERIFIED_AT_KEY);
+                const raw = appStorage.getItem(WA_PHONE_VERIFIED_AT_KEY);
                 const o = raw ? JSON.parse(raw) : null;
                 const m = new Map();
                 if (o && typeof o === 'object') {
@@ -1213,12 +1224,12 @@
                 const entries = [...map.entries()].filter(([k, v]) => k && Number.isFinite(v) && v > 0);
                 entries.sort((a, b) => b[1] - a[1]);
                 const tail = entries.slice(0, WA_PHONE_VERIFIED_AT_MAX);
-                localStorage.setItem(WA_PHONE_VERIFIED_AT_KEY, JSON.stringify(Object.fromEntries(tail)));
+                appStorage.setItem(WA_PHONE_VERIFIED_AT_KEY, JSON.stringify(Object.fromEntries(tail)));
             } catch (_) {}
         };
         const loadWaDrawerTruthMap = () => {
             try {
-                const raw = localStorage.getItem(WA_DRAWER_TRUTH_MAP_KEY);
+                const raw = appStorage.getItem(WA_DRAWER_TRUTH_MAP_KEY);
                 const o = raw ? JSON.parse(raw) : null;
                 const m = new Map();
                 if (o && typeof o === 'object') {
@@ -1247,7 +1258,7 @@
                         at: Number(v?.at || 0) || Date.now(),
                     };
                 });
-                localStorage.setItem(WA_DRAWER_TRUTH_MAP_KEY, JSON.stringify(payload));
+                appStorage.setItem(WA_DRAWER_TRUTH_MAP_KEY, JSON.stringify(payload));
             } catch (_) {}
         };
         const waDrawerDoneKeyVariants = (chatKeyRaw, phoneRaw) => {
@@ -1748,7 +1759,7 @@
 
         const readCachedInboxView = () => {
             try {
-                const raw = JSON.parse(localStorage.getItem(GLOBAL_INBOX_VIEW_KEY) || '{}');
+                const raw = JSON.parse(appStorage.getItem(GLOBAL_INBOX_VIEW_KEY) || '{}');
                 return {
                     currentContactId: '',
                     inboxFilter: ['all', 'unread', 'unreplied', 'follow', 'group', 'updates'].includes(raw.inboxFilter)
@@ -1763,7 +1774,7 @@
 
         const writeCachedInboxView = (payload = {}) => {
             try {
-                localStorage.setItem(GLOBAL_INBOX_VIEW_KEY, JSON.stringify({
+                appStorage.setItem(GLOBAL_INBOX_VIEW_KEY, JSON.stringify({
                     currentContactId: '',
                     inboxFilter: ['all', 'unread', 'unreplied', 'follow', 'group', 'updates'].includes(payload.inboxFilter)
                         ? payload.inboxFilter
@@ -1970,7 +1981,7 @@
 
         const readHiddenInboxMergeKeys = () => {
             try {
-                const raw = JSON.parse(localStorage.getItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY) || '[]');
+                const raw = JSON.parse(appStorage.getItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY) || '[]');
                 if (!Array.isArray(raw)) return new Set();
                 return new Set(raw.map((k) => String(k || '').trim()).filter(Boolean));
             } catch (_) {
@@ -1981,7 +1992,7 @@
         const writeHiddenInboxMergeKeys = (set) => {
             try {
                 const values = Array.from(set || []).map((k) => String(k || '').trim()).filter(Boolean);
-                localStorage.setItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY, JSON.stringify(values));
+                appStorage.setItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY, JSON.stringify(values));
             } catch (_) {}
         };
 
@@ -1996,7 +2007,7 @@
         /** 全局汇聚调试：localStorage.fastgc_debug_inbox_merge = '1' 时输出诊断日志 */
         const isInboxMergeDebugOn = () => {
             try {
-                return String(localStorage.getItem('fastgc_debug_inbox_merge') || '').trim() === '1';
+                return String(appStorage.getItem('fastgc_debug_inbox_merge') || '').trim() === '1';
             } catch (_) {
                 return false;
             }
@@ -2042,13 +2053,13 @@
             const key = SCRIPT_LIBRARY_KEYS[libraryId];
             if (!key) throw new Error('Unknown script library');
             try {
-                const saved = localStorage.getItem(key);
+                const saved = appStorage.getItem(key);
                 if (saved !== null) {
                     const raw = JSON.parse(saved);
                     return Array.isArray(raw) ? raw : [];
                 }
                 if (libraryId === 'zh') return [];
-                const legacy = localStorage.getItem(SCRIPT_QUICK_KEY);
+                const legacy = appStorage.getItem(SCRIPT_QUICK_KEY);
                 const raw = legacy === null ? DEFAULT_SCRIPT_QUICK : JSON.parse(legacy);
                 const items = Array.isArray(raw) ? raw : [];
                 // 保留旧键供失败恢复；目的库存在后不再读取旧键。
@@ -2063,13 +2074,13 @@
             const key = SCRIPT_LIBRARY_KEYS[libraryId];
             if (!key || !Array.isArray(items)) throw new Error('Invalid script library data');
             try {
-                localStorage.setItem(key, JSON.stringify(items));
+                appStorage.setItem(key, JSON.stringify(items));
                 return true;
             } catch (_) { return false; }
         };
 
         const readScriptLibraryActive = () => {
-            try { return localStorage.getItem(SCRIPT_LIBRARY_ACTIVE_KEY) === 'zh' ? 'zh' : 'en'; }
+            try { return appStorage.getItem(SCRIPT_LIBRARY_ACTIVE_KEY) === 'zh' ? 'zh' : 'en'; }
             catch (_) { return 'en'; }
         };
 
@@ -7512,11 +7523,11 @@ ${WA_INJECT_TRANSLATE_CORE}
                 try {
                     const items = SQLITE_MIGRATION_KEYS.map((key) => ({
                         key,
-                        value: String(localStorage.getItem(key) || ''),
+                        value: String(appStorage.getItem(key) || ''),
                     })).filter((it) => it.value);
                     if (items.length > 0) await bridge.storageMigrateBatch({ items });
                     if (bridge.storageSet) await bridge.storageSet({ key: SQLITE_MIGRATION_MARK_KEY, value: '1' });
-                    try { localStorage.setItem(SQLITE_MIGRATION_MARK_KEY, '1'); } catch (_) {}
+                    try { appStorage.setItem(SQLITE_MIGRATION_MARK_KEY, '1'); } catch (_) {}
                     await refresh();
                 } catch (e) {
                     setError(e instanceof Error ? e.message : String(e));
@@ -9989,7 +10000,7 @@ ${WA_INJECT_TRANSLATE_CORE}
 
         function readScriptsPanelWidthStored() {
             try {
-                const n = parseInt(localStorage.getItem(SCRIPTS_PANEL_WIDTH_KEY), 10);
+                const n = parseInt(appStorage.getItem(SCRIPTS_PANEL_WIDTH_KEY), 10);
                 if (Number.isFinite(n)) {
                     return Math.min(SCRIPTS_PANEL_WIDTH_MAX, Math.max(SCRIPTS_PANEL_WIDTH_MIN, n));
                 }
@@ -9999,7 +10010,7 @@ ${WA_INJECT_TRANSLATE_CORE}
 
         function readScriptsPanelCollapsedStored() {
             try {
-                return localStorage.getItem(SCRIPTS_PANEL_COLLAPSED_KEY) === '1';
+                return appStorage.getItem(SCRIPTS_PANEL_COLLAPSED_KEY) === '1';
             } catch (_) {
                 return false;
             }
@@ -10142,7 +10153,7 @@ ${WA_INJECT_TRANSLATE_CORE}
         const App = () => {
             const [lang, setLang] = useState(() => {
                 try {
-                    const s = localStorage.getItem(UI_LANG_KEY);
+                    const s = appStorage.getItem(UI_LANG_KEY);
                     if (s === 'en' || s === 'zh') return s;
                 } catch (_) {}
                 return 'zh';
@@ -10151,7 +10162,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             const UI_FONT_SIZE_KEY = 'fastgc_ui_font_size';
             const [uiFontSize, setUiFontSize] = useState(() => {
                 try {
-                    const v = String(localStorage.getItem(UI_FONT_SIZE_KEY) || '').trim();
+                    const v = String(appStorage.getItem(UI_FONT_SIZE_KEY) || '').trim();
                     if (v === 'sm' || v === 'md' || v === 'lg') return v;
                 } catch (_) {}
                 return 'md';
@@ -10159,7 +10170,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             const UI_TRANS_FONT_COLOR_KEY = 'fastgc_ui_trans_font_color';
             const [uiTransFontColor, setUiTransFontColor] = useState(() => {
                 try {
-                    const v = String(localStorage.getItem(UI_TRANS_FONT_COLOR_KEY) || '').trim();
+                    const v = String(appStorage.getItem(UI_TRANS_FONT_COLOR_KEY) || '').trim();
                     if (v === 'green' || v === 'blue' || v === 'purple' || v === 'orange') return v;
                 } catch (_) {}
                 return 'green';
@@ -10182,7 +10193,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             const [scriptsPanelCollapsed, setScriptsPanelCollapsed] = useState(readScriptsPanelCollapsedStored);
             const [scriptLibraryActive, setScriptLibraryActive] = useState(readScriptLibraryActive);
             useEffect(() => {
-                try { localStorage.setItem(SCRIPT_LIBRARY_ACTIVE_KEY, scriptLibraryActive); } catch (_) {}
+                try { appStorage.setItem(SCRIPT_LIBRARY_ACTIVE_KEY, scriptLibraryActive); } catch (_) {}
             }, [scriptLibraryActive]);
             const scriptsPanelWidthRef = useRef(scriptsPanelWidthPx);
             const scriptsPanelShellRef = useRef(null);
@@ -10197,7 +10208,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                     document.body.style.zoom = String(z);
                 } catch (_) {}
                 try {
-                    localStorage.setItem(UI_FONT_SIZE_KEY, String(uiFontSize || 'md'));
+                    appStorage.setItem(UI_FONT_SIZE_KEY, String(uiFontSize || 'md'));
                 } catch (_) {}
             }, [uiFontSize]);
 
@@ -10213,7 +10224,7 @@ ${WA_INJECT_TRANSLATE_CORE}
 
             useEffect(() => {
                 try {
-                    localStorage.setItem(UI_TRANS_FONT_COLOR_KEY, String(uiTransFontColor || 'green'));
+                    appStorage.setItem(UI_TRANS_FONT_COLOR_KEY, String(uiTransFontColor || 'green'));
                 } catch (_) {}
                 const colors = resolveTransTipColors();
                 const script = `(() => {
@@ -10244,7 +10255,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                 setScriptsPanelCollapsed((prev) => {
                     const next = !prev;
                     try {
-                        localStorage.setItem(SCRIPTS_PANEL_COLLAPSED_KEY, next ? '1' : '0');
+                        appStorage.setItem(SCRIPTS_PANEL_COLLAPSED_KEY, next ? '1' : '0');
                     } catch (_) {}
                     return next;
                 });
@@ -10302,7 +10313,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                     if (shell) shell.style.width = '';
                     setScriptsPanelWidthPx(nw);
                     try {
-                        localStorage.setItem(SCRIPTS_PANEL_WIDTH_KEY, String(nw));
+                        appStorage.setItem(SCRIPTS_PANEL_WIDTH_KEY, String(nw));
                     } catch (_) {}
                 };
                 const onEsc = (k) => {
@@ -10375,25 +10386,25 @@ ${WA_INJECT_TRANSLATE_CORE}
                     try {
                         const migrateItems = SQLITE_MIGRATION_KEYS.map((key) => ({
                             key,
-                            value: String(localStorage.getItem(key) || ''),
+                            value: String(appStorage.getItem(key) || ''),
                         })).filter((it) => it.value);
                         const migration = await bridge.storageMigrateBatch?.({ items: migrateItems });
                         if (!migration?.ok || migration.saved !== migrateItems.length) {
                             notifyStorageFailure();
                             return;
                         }
-                        try { localStorage.setItem(SQLITE_MIGRATION_MARK_KEY, '1'); } catch (_) {}
+                        try { appStorage.setItem(SQLITE_MIGRATION_MARK_KEY, '1'); } catch (_) {}
                     } catch (_) {}
                     try {
                         if (!bridge.storageGet) return;
                         for (const key of SQLITE_MIGRATION_KEYS) {
                             if (cancelled) return;
-                            if (String(localStorage.getItem(key) || '')) continue;
+                            if (String(appStorage.getItem(key) || '')) continue;
                             const r = await bridge.storageGet({ key });
                             if (!r?.ok) { notifyStorageFailure(); continue; }
                             const v = String(r?.value || '');
                             if (!v) continue;
-                            localStorage.setItem(key, v);
+                            appStorage.setItem(key, v);
                         }
                     } catch (_) {}
                 })();
@@ -10415,7 +10426,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                     writeCachedInbox(cached);
                 }
                 try {
-                    localStorage.removeItem('fastgc_global_inbox_order');
+                    appStorage.removeItem('fastgc_global_inbox_order');
                 } catch (_) {}
                 return cached;
             });
@@ -10443,8 +10454,8 @@ ${WA_INJECT_TRANSLATE_CORE}
             const WA_REQ_TOK_STORAGE_KEY = '__fastgcWaPhoneRequestTokenSeed';
             const readWaRequestTokenSeedStored = () => {
                 try {
-                    if (typeof localStorage === 'undefined') return 0;
-                    const n = Number(localStorage.getItem(WA_REQ_TOK_STORAGE_KEY));
+                    if (typeof appStorage === 'undefined') return 0;
+                    const n = Number(appStorage.getItem(WA_REQ_TOK_STORAGE_KEY));
                     return Number.isFinite(n) && n > 0 ? n : 0;
                 } catch (_) {
                     return 0;
@@ -10452,8 +10463,8 @@ ${WA_INJECT_TRANSLATE_CORE}
             };
             const persistWaRequestTokenSeed = (seed) => {
                 try {
-                    if (typeof localStorage === 'undefined') return;
-                    localStorage.setItem(WA_REQ_TOK_STORAGE_KEY, String(seed));
+                    if (typeof appStorage === 'undefined') return;
+                    appStorage.setItem(WA_REQ_TOK_STORAGE_KEY, String(seed));
                 } catch (_) {}
             };
             const waPhoneCommitRequestSeedRef = useRef(Math.max(readWaRequestTokenSeedStored(), Date.now()));
@@ -10515,7 +10526,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                 const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
                 const h = typeof window !== 'undefined' ? window.innerHeight : 720;
                 try {
-                    const raw = JSON.parse(localStorage.getItem(TRANSLATE_FAB_POS_KEY) || 'null');
+                    const raw = JSON.parse(appStorage.getItem(TRANSLATE_FAB_POS_KEY) || 'null');
                     if (raw && Number.isFinite(raw.x) && Number.isFinite(raw.y)) {
                         return clampTranslateFabPosCore({ x: raw.x, y: raw.y }, w, h);
                     }
@@ -10525,13 +10536,13 @@ ${WA_INJECT_TRANSLATE_CORE}
                     }
                 } catch (_) {}
                 try {
-                    const raw4 = JSON.parse(localStorage.getItem(TRANSLATE_FAB_POS_V4_KEY) || 'null');
+                    const raw4 = JSON.parse(appStorage.getItem(TRANSLATE_FAB_POS_V4_KEY) || 'null');
                     if (raw4 && Number.isFinite(raw4.x)) {
                         return clampTranslateFabPosCore({ x: raw4.x, y: h - TRANSLATE_FAB_H - 12 }, w, h);
                     }
                 } catch (_) {}
                 try {
-                    const c = JSON.parse(localStorage.getItem(TRANSLATE_FAB_CORNER_KEY) || 'null');
+                    const c = JSON.parse(appStorage.getItem(TRANSLATE_FAB_CORNER_KEY) || 'null');
                     if (c === 'bl' || c === 'br') {
                         const x = c === 'bl' ? 8 : Math.max(8, w - TRANSLATE_FAB_W - 8);
                         return clampTranslateFabPosCore({ x, y: h - TRANSLATE_FAB_H - 12 }, w, h);
@@ -10813,21 +10824,21 @@ ${WA_INJECT_TRANSLATE_CORE}
             };
             const [sendTranslateEnabled, setSendTranslateEnabled] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_send_translate_enabled') !== '0';
+                    return appStorage.getItem('fastgc_send_translate_enabled') !== '0';
                 } catch (_) {
                     return true;
                 }
             });
             const [sendSourceLang, setSendSourceLang] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_send_translate_source') || 'auto';
+                    return appStorage.getItem('fastgc_send_translate_source') || 'auto';
                 } catch (_) {
                     return 'auto';
                 }
             });
             const [sendTargetLang, setSendTargetLang] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_send_translate_target') || 'en';
+                    return appStorage.getItem('fastgc_send_translate_target') || 'en';
                 } catch (_) {
                     return 'en';
                 }
@@ -10844,28 +10855,28 @@ ${WA_INJECT_TRANSLATE_CORE}
             const incomingTranslatePostBusyRetryTimerRef = useRef(null);
             const [fixedSeatTranslateEnabled, setFixedSeatTranslateEnabled] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_fixed_seat_translate_enabled') === '1';
+                    return appStorage.getItem('fastgc_fixed_seat_translate_enabled') === '1';
                 } catch (_) {
                     return false;
                 }
             });
             const [msgTranslateEnabled, setMsgTranslateEnabled] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_msg_translate_enabled') !== '0';
+                    return appStorage.getItem('fastgc_msg_translate_enabled') !== '0';
                 } catch (_) {
                     return true;
                 }
             });
             const [msgSourceLang, setMsgSourceLang] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_msg_translate_source') || 'auto';
+                    return appStorage.getItem('fastgc_msg_translate_source') || 'auto';
                 } catch (_) {
                     return 'auto';
                 }
             });
             const [msgTargetLang, setMsgTargetLang] = useState(() => {
                 try {
-                    return localStorage.getItem('fastgc_msg_translate_target') || 'zh-CN';
+                    return appStorage.getItem('fastgc_msg_translate_target') || 'zh-CN';
                 } catch (_) {
                     return 'zh-CN';
                 }
@@ -11446,9 +11457,9 @@ ${WA_INJECT_TRANSLATE_CORE}
             const clearGlobalInbox = () => {
                 if (!confirm(t('clearInboxConfirm'))) return;
                 inboxMergeSuppressedUntilRef.current = Date.now() + 12000;
-                localStorage.removeItem(GLOBAL_INBOX_KEY);
-                localStorage.removeItem('fastgc_global_inbox_order');
-                localStorage.removeItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY);
+                appStorage.removeItem(GLOBAL_INBOX_KEY);
+                appStorage.removeItem('fastgc_global_inbox_order');
+                appStorage.removeItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY);
                 writeCachedInbox([]);
                 writeHiddenInboxMergeKeys(new Set());
                 setGlobalInbox([]);
@@ -13115,9 +13126,9 @@ ${WA_INJECT_TRANSLATE_CORE}
                 const p = clampTranslateFabPos(pos);
                 setTranslateFabPos(p);
                 try {
-                    localStorage.setItem(TRANSLATE_FAB_POS_KEY, JSON.stringify(p));
-                    localStorage.removeItem(TRANSLATE_FAB_CORNER_KEY);
-                    localStorage.removeItem(TRANSLATE_FAB_POS_V4_KEY);
+                    appStorage.setItem(TRANSLATE_FAB_POS_KEY, JSON.stringify(p));
+                    appStorage.removeItem(TRANSLATE_FAB_CORNER_KEY);
+                    appStorage.removeItem(TRANSLATE_FAB_POS_V4_KEY);
                 } catch (_) {}
             };
             const handleTranslateFabPointerDown = (e) => {
@@ -13192,9 +13203,9 @@ ${WA_INJECT_TRANSLATE_CORE}
                         const p = clampTranslateFabPos(prev);
                         if (p.x === prev.x && p.y === prev.y) return prev;
                         try {
-                            localStorage.setItem(TRANSLATE_FAB_POS_KEY, JSON.stringify(p));
-                            localStorage.removeItem(TRANSLATE_FAB_CORNER_KEY);
-                            localStorage.removeItem(TRANSLATE_FAB_POS_V4_KEY);
+                            appStorage.setItem(TRANSLATE_FAB_POS_KEY, JSON.stringify(p));
+                            appStorage.removeItem(TRANSLATE_FAB_CORNER_KEY);
+                            appStorage.removeItem(TRANSLATE_FAB_POS_V4_KEY);
                         } catch (_) {}
                         return p;
                     });
@@ -13362,10 +13373,10 @@ ${WA_INJECT_TRANSLATE_CORE}
 
             useEffect(() => {
                 try {
-                    localStorage.setItem('fastgc_send_translate_enabled', sendTranslateEnabled ? '1' : '0');
-                    localStorage.setItem('fastgc_send_translate_source', sendSourceLang);
-                    localStorage.setItem('fastgc_send_translate_target', sendTargetLang);
-                    localStorage.setItem('fastgc_fixed_seat_translate_enabled', fixedSeatTranslateEnabled ? '1' : '0');
+                    appStorage.setItem('fastgc_send_translate_enabled', sendTranslateEnabled ? '1' : '0');
+                    appStorage.setItem('fastgc_send_translate_source', sendSourceLang);
+                    appStorage.setItem('fastgc_send_translate_target', sendTargetLang);
+                    appStorage.setItem('fastgc_fixed_seat_translate_enabled', fixedSeatTranslateEnabled ? '1' : '0');
                 } catch (_) {}
                 fixedSeatTranslateEnabledRef.current = fixedSeatTranslateEnabled;
                 const sendTimers = allMountedSeatIds.map((sid, idx) => {
@@ -13382,10 +13393,10 @@ ${WA_INJECT_TRANSLATE_CORE}
 
             useEffect(() => {
                 try {
-                    localStorage.setItem('fastgc_msg_translate_enabled', msgTranslateEnabled ? '1' : '0');
-                    localStorage.setItem('fastgc_msg_translate_source', msgSourceLang);
-                    localStorage.setItem('fastgc_msg_translate_target', msgTargetLang);
-                    localStorage.setItem('fastgc_fixed_seat_translate_enabled', fixedSeatTranslateEnabled ? '1' : '0');
+                    appStorage.setItem('fastgc_msg_translate_enabled', msgTranslateEnabled ? '1' : '0');
+                    appStorage.setItem('fastgc_msg_translate_source', msgSourceLang);
+                    appStorage.setItem('fastgc_msg_translate_target', msgTargetLang);
+                    appStorage.setItem('fastgc_fixed_seat_translate_enabled', fixedSeatTranslateEnabled ? '1' : '0');
                 } catch (_) {}
                 msgTranslateEnabledRef.current = msgTranslateEnabled;
                 fixedSeatTranslateEnabledRef.current = fixedSeatTranslateEnabled;
@@ -13412,7 +13423,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                         if (cancelled) return;
                         await bridge.setUiLocale(lang);
                         try {
-                            localStorage.setItem(UI_LANG_KEY, lang);
+                            appStorage.setItem(UI_LANG_KEY, lang);
                         } catch (_) {}
                         if (cancelled) return;
                         if (prev !== lang) {
@@ -14009,7 +14020,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                                                 );
                                                 scriptsPanelWidthRef.current = nw;
                                                 try {
-                                                    localStorage.setItem(SCRIPTS_PANEL_WIDTH_KEY, String(nw));
+                                                    appStorage.setItem(SCRIPTS_PANEL_WIDTH_KEY, String(nw));
                                                 } catch (_) {}
                                                 return nw;
                                             });
@@ -14120,20 +14131,20 @@ ${WA_INJECT_TRANSLATE_CORE}
                                     activeSeatId: String(seatLayout.activeSeatId || ''),
                                     onCleanupTranslateUiActiveSeat: () => cleanupTranslateUi(seatLayout.activeSeatId),
                                     onClearGlobalInboxCache: () => {
-                                        try { localStorage.removeItem(GLOBAL_INBOX_KEY); } catch (_) {}
-                                        try { localStorage.removeItem(GLOBAL_INBOX_VIEW_KEY); } catch (_) {}
-                                        try { localStorage.removeItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY); } catch (_) {}
-                                        try { localStorage.removeItem('fastgc_global_inbox_order'); } catch (_) {}
+                                        try { appStorage.removeItem(GLOBAL_INBOX_KEY); } catch (_) {}
+                                        try { appStorage.removeItem(GLOBAL_INBOX_VIEW_KEY); } catch (_) {}
+                                        try { appStorage.removeItem(GLOBAL_INBOX_HIDDEN_MERGE_KEYS_KEY); } catch (_) {}
+                                        try { appStorage.removeItem('fastgc_global_inbox_order'); } catch (_) {}
                                         try {
                                             setGlobalInbox([]);
                                             writeCachedInbox([]);
                                         } catch (_) {}
                                     },
                                     onClearWaPhoneCaches: () => {
-                                        try { localStorage.removeItem(WA_PHONE_CHATKEY_CACHE_KEY); } catch (_) {}
-                                        try { localStorage.removeItem(WA_PHONE_VERIFIED_AT_KEY); } catch (_) {}
-                                        try { localStorage.removeItem(WA_DRAWER_PHONE_DONE_KEY); } catch (_) {}
-                                        try { localStorage.removeItem(WA_DRAWER_TRUTH_MAP_KEY); } catch (_) {}
+                                        try { appStorage.removeItem(WA_PHONE_CHATKEY_CACHE_KEY); } catch (_) {}
+                                        try { appStorage.removeItem(WA_PHONE_VERIFIED_AT_KEY); } catch (_) {}
+                                        try { appStorage.removeItem(WA_DRAWER_PHONE_DONE_KEY); } catch (_) {}
+                                        try { appStorage.removeItem(WA_DRAWER_TRUTH_MAP_KEY); } catch (_) {}
                                     },
                                 }}
                                 onClose={() => setShowAdminConfigModal(false)}

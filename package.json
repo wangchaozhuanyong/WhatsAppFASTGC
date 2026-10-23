@@ -1,6 +1,6 @@
 {
   "name": "fastgc-whatsapp-shell",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "private": true,
   "author": "FastGC",
   "description": "FastGC UI shell with embedded WhatsApp Web (Electron webview)",
@@ -37,7 +37,7 @@
     "test": "npm run test:simulate-phone-and-jump",
     "ci": "npm run build:pack-bundles && npm run test:wa-js-compat && npm run test:member-removal && npm run test:simulate-phone-and-jump && npm run test:simulate-send-translate && npm run test:simulate-host-bridge && node scripts/verify-diagnostics-cleanup.mjs --skip-electron-smoke && npx tsc --noEmit && npm run test:shutdown-flow",
     "build:renderer-app": "node scripts/build-renderer-app.mjs",
-    "test:shutdown-flow": "node scripts/verify-shutdown-flow.cjs && node scripts/verify-session-policy.cjs"
+    "test:shutdown-flow": "node scripts/verify-shutdown-flow.cjs && node scripts/verify-session-policy.cjs && node scripts/verify-ui-storage.cjs"
   },
   "dependencies": {
     "electron-updater": "6.8.9",
@@ -64,6 +64,7 @@
     },
     "files": [
       "main.js",
+      "ui-storage.js",
       "cloud-translation.js",
       "preload.js",
       "webview-translate-preload.js",

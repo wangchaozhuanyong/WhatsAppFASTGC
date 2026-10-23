@@ -115,7 +115,7 @@ function main() {
     'WA_PHONE_VERIFIED_AT_KEY',
     'WA_DRAWER_PHONE_DONE_KEY',
     'WA_DRAWER_TRUTH_MAP_KEY',
-    'localStorage.removeItem',
+    'appStorage.removeItem',
     'setGlobalInbox',
     'writeCachedInbox',
   ];

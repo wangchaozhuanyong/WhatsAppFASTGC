@@ -1,10 +1,10 @@
 # FastGC WhatsApp
 
-基于 Electron 的 Windows 多账号 WhatsApp 客服工作台。当前版本：**1.0.35**。
+基于 Electron 的 Windows 多账号 WhatsApp 客服工作台。当前版本：**1.0.36**。
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/wangchaozhuanyong/WhatsAppFASTGC/releases/latest) 下载 `FastGC WhatsApp-Setup-1.0.35.exe`，安装后使用桌面 FastGC WhatsApp 快捷方式。
+从 [GitHub Releases](https://github.com/wangchaozhuanyong/WhatsAppFASTGC/releases/latest) 下载 `FastGC WhatsApp-Setup-1.0.36.exe`，安装后使用桌面 FastGC WhatsApp 快捷方式。
 
 安装包不包含账号、聊天记录、管理员密码或翻译密钥。升级保留本机数据；首次使用需要关联自己的 WhatsApp 账号。
 
@@ -30,6 +30,8 @@ npm start
 ```
 
 正式安装包使用预编译的 JSX、本地 CSS 和 CSP，不在启动时运行 Babel。未配置更新源时不加载更新组件；已配置时延后初始化。
+
+1.0.36 将宿主设置与中英话术迁入已有 SQLite：首次升级读取旧界面存储并在事务内迁移，保留 SQLite 中已有值（包括有效空值），成功后标记完成；后续启动不打开宿主 DOMStorage。WhatsApp 页面自己的会话存储不经过此适配层。写盘失败会提示，内存不会提前更新为未保存的值。
 
 Windows 退出先写回缓存、检查点并关闭 SQLite、刷新会话 Cookie，然后正常退出。存储完成后才启动持有本进程句柄的隐藏辅助进程；若 Chromium 原生退出超过8秒，辅助进程仅回收该进程，并记录 `shutdown-native-timeout`。这是一项退出保护，不代表上游 Chromium 原生问题已被消除。
 

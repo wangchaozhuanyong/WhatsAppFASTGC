@@ -8,6 +8,7 @@ const { createCloudTranslation } = require('./cloud-translation');
 const { validateDataTarget, migrateDataRootSync } = require('./data-root-migration');
 const { armWindowsShutdownGuard } = require('./shutdown-guard');
 const { drainSessionsForExit } = require('./shutdown-flow');
+const { createBackend: createUiStorageBackend } = require('./ui-storage');
 
 /** 与 package.json build.appId 一致：任务栏分组、快捷方式关联、单实例锁 */
 const APP_ID = 'com.fastgc.whatsapp.shell';
@@ -1178,6 +1179,17 @@ ipcMain.handle('app:set-seat-config', (_event, payload = {}) => {
 });
 
 const isStorageKey = key => [...SQLITE_MIGRATION_TRACKED_KEYS, SQLITE_MIGRATION_MARK_KEY].includes(key);
+const uiStorageBackend = createUiStorageBackend(getStorageDb);
+ipcMain.on('app:ui-storage-snapshot-sync', event => {
+  try { event.returnValue = isTranslationSettingsHost(event) ? uiStorageBackend.snapshot() : { ok: false, error: 'FORBIDDEN' }; }
+  catch (_) { event.returnValue = { ok: false, error: 'STORAGE_READ_FAILED' }; }
+});
+ipcMain.on('app:ui-storage-migrate-sync', (event, items) => {
+  event.returnValue = isTranslationSettingsHost(event) ? uiStorageBackend.migrate(items) : { ok: false, error: 'FORBIDDEN' };
+});
+ipcMain.on('app:ui-storage-mutate-sync', (event, payload = {}) => {
+  event.returnValue = isTranslationSettingsHost(event) ? uiStorageBackend.mutate(payload?.key, payload?.value, payload?.remove === true) : { ok: false, error: 'FORBIDDEN' };
+});
 ipcMain.on('app:storage-get-sync', (event, payload = {}) => {
   const key = String(payload.key || '').trim();
   if (!isTranslationSettingsHost(event) || !isStorageKey(key)) { event.returnValue = { ok: false, error: 'FORBIDDEN' }; return; }

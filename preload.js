@@ -2,6 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 const preloadTiming = { started: performance.now() };
 
 contextBridge.exposeInMainWorld('fastgcBridge', {
+  uiStorageSnapshotSync() {
+    return ipcRenderer.sendSync('app:ui-storage-snapshot-sync');
+  },
+  uiStorageMigrateSync(items) {
+    return ipcRenderer.sendSync('app:ui-storage-migrate-sync', items);
+  },
+  uiStorageMutateSync(key, value, remove) {
+    return ipcRenderer.sendSync('app:ui-storage-mutate-sync', { key, value, remove });
+  },
   openExternal(url) {
     return ipcRenderer.invoke('app:open-external', { url });
   },
