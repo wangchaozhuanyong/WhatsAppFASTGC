@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { drainSessionsForExit, stopGuestWorkersForExit } = require('../shutdown-flow');
+const { drainSessionsForExit } = require('../shutdown-flow');
 (async () => {
   const events = [];
   const session = {flushStorageData(){events.push('storage')},cookies:{async flushStore(){events.push('cookies')}},async closeAllConnections(){events.push('connections')}};
@@ -15,12 +15,5 @@ const { drainSessionsForExit, stopGuestWorkersForExit } = require('../shutdown-f
   const network = {...session,closeAllConnections(){return new Promise(()=>{})}};
   const warned=await drainSessionsForExit([network],{connectionTimeoutMs:20});
   assert.equal(warned.connectionsClosed,0);assert.equal(warned.connectionWarnings,1);
-  let attached=false,detached=0,commands=[];
-  const guest={isDestroyed:()=>false,debugger:{isAttached:()=>attached,attach(){attached=true},detach(){attached=false;detached++},async sendCommand(command){commands.push(command)}}};
-  const stopped=await stopGuestWorkersForExit([guest,guest]);
-  assert.deepEqual(stopped,{guests:1,stopped:1,warnings:0});assert.deepEqual(commands,['ServiceWorker.stopAllWorkers']);assert.equal(detached,1);
-  attached=true;await stopGuestWorkersForExit([guest]);assert.equal(detached,1,'existing debugger must remain attached');
-  attached=false;guest.debugger.sendCommand=()=>new Promise(()=>{});
-  const timeout=await stopGuestWorkersForExit([guest],{timeoutMs:20});assert.equal(timeout.warnings,1);assert.equal(attached,false);
   console.log(JSON.stringify({passed:true,duplicateSessionsFlushedOnce:true,storageFailureDoesNotDisconnect:true,flushDeadline:true,connectionDeadline:true}));
 })().catch(error=>{console.error(error);process.exitCode=1});

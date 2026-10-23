@@ -20,20 +20,4 @@ async function drainSessionsForExit(sessions, { flushTimeoutMs = 10000, connecti
   return { sessionCount: active.length, connectionsClosed: connections.filter(result => result.status === 'fulfilled').length, connectionWarnings: connections.filter(result => result.status !== 'fulfilled').length };
 }
 
-async function stopGuestWorkersForExit(guests, { timeoutMs = 1200 } = {}) {
-  const results = await Promise.allSettled([...new Set(guests)].map(async guest => {
-    if (guest.isDestroyed()) return;
-    const debuggerApi = guest.debugger;
-    const attachedHere = !debuggerApi.isAttached();
-    try {
-      if (attachedHere) debuggerApi.attach('1.3');
-      // Stop running workers without unregistering them or clearing account data.
-      await withDeadline(debuggerApi.sendCommand('ServiceWorker.stopAllWorkers'), timeoutMs, 'WORKER_STOP_TIMEOUT');
-    } finally {
-      if (attachedHere && !guest.isDestroyed() && debuggerApi.isAttached()) debuggerApi.detach();
-    }
-  }));
-  return { guests: results.length, stopped: results.filter(r => r.status === 'fulfilled').length, warnings: results.filter(r => r.status === 'rejected').length };
-}
-
-module.exports = { drainSessionsForExit, stopGuestWorkersForExit };
+module.exports = { drainSessionsForExit };

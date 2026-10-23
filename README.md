@@ -35,7 +35,7 @@ npm start
 
 Windows 退出先写回缓存、检查点并关闭 SQLite、刷新会话 Cookie，然后正常退出。存储完成后才启动持有本进程句柄的隐藏辅助进程；若 Chromium 原生退出超过8秒，辅助进程仅回收该进程，并记录 `shutdown-native-timeout`。这是一项退出保护，不代表上游 Chromium 原生问题已被消除。
 
-关闭窗口前先停止对应席位正在运行的 Service Worker，不注销注册、不清空数据；显式 `app.quit()` 同样进入保存流程，避免跳过 Cookie 刷新。
+显式 `app.quit()` 同样进入保存流程，避免跳过 Cookie 刷新。
 
 ## 打包
 
