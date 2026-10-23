@@ -58,6 +58,11 @@ const cases=[];
  vm.createContext(render);vm.runInContext(html.slice(start,end)+'\nglobalThis.read=readStorageTextWithSqliteFirst;globalThis.write=writeMigratedStorage',render);
  assert.equal(render.read('fastgc_global_inbox'),'');assert.equal(render.write('fastgc_global_inbox','[]'),true);assert.equal(writes,1);fail=true;assert.equal(render.write('fastgc_global_inbox','wrong'),false);assert.equal(render.read('fastgc_global_inbox'),'[]');assert.equal(errors,1);
  cases.push('one durable write per business change; failed writes and deleted values remain correct');
+ const notices=[];const notificationContext={setTimeout:callback=>notices.push(callback),window:{alert(){}}};vm.createContext(notificationContext);
+ const noticeStart=html.indexOf('let storageErrorShown = false;'),noticeEnd=html.indexOf('const appStorage =',noticeStart);
+ vm.runInContext(html.slice(noticeStart,noticeEnd)+'\nnotifyStorageFailure();notifyStorageFailure();',notificationContext);assert.equal(notices.length,1);
+ vm.runInContext('storageErrorShown=false;notifyStorageFailure()',notificationContext);assert.equal(notices.length,2);
+ cases.push('repeated disk failures produce one notification until storage recovers');
 
  let timer,writeFails=true,cacheWrites=0;const cache={fastgcTranslatePersistWriteTimer:null,fastgcTranslatePersistDirty:true,fastgcTranslatePersistRetryMs:1200,fastgcTranslatePersistMap:new Map([['key',{text:'text',lastHitAt:1}]]),FASTGC_TRANSLATE_PERSIST_MAX:4000,fastgcTranslatePersistPath:()=>file,setTimeout(callback,ms){timer={callback,ms};return{unref(){}}},writeJsonDurably(){cacheWrites++;if(writeFails)throw Error('disk failed')},writeDiagnosticLog(){}};
  vm.createContext(cache);vm.runInContext(fn('fastgcTranslatePersistScheduleWrite'),cache);cache.fastgcTranslatePersistScheduleWrite();assert.equal(timer.ms,1200);timer.callback();assert.equal(cache.fastgcTranslatePersistDirty,true);assert.equal(timer.ms,2400);writeFails=false;timer.callback();assert.equal(cache.fastgcTranslatePersistDirty,false);assert.equal(cacheWrites,2);

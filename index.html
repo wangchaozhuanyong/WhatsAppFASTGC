@@ -138,10 +138,14 @@
 
     <script type="text/babel">
         window.performance.mark('fastgc-renderer-entry');
+        let storageErrorShown = false;
+        const notifyStorageFailure = () => {
+            if (storageErrorShown) return;
+            storageErrorShown = true;
+            setTimeout(() => window.alert('数据保存失败。请保留当前窗口，并检查磁盘空间和数据目录权限。\nData could not be saved. Keep this window open and check disk space and permissions.'), 0);
+        };
         const appStorage = window.fastgcBridge
-            ? window.FastgcUiStorage.createClient(window.fastgcBridge, () => window.localStorage, () => {
-                setTimeout(() => window.alert('数据保存失败，请保留窗口并检查磁盘和目录权限。'), 0);
-            })
+            ? window.FastgcUiStorage.createClient(window.fastgcBridge, () => window.localStorage, notifyStorageFailure)
             : window.localStorage;
         window.__FASTGC_UI_STORAGE__ = { migratedNow: appStorage.migratedNow === true };
         try {
@@ -188,12 +192,6 @@
             CUSTOM_LINKS_STORAGE_KEY,
         ];
         const FASTGC_STORAGE_SNAPSHOT = { ...((window && window.__FASTGC_STORAGE_SNAPSHOT__) || {}) };
-        let storageErrorShown = false;
-        const notifyStorageFailure = () => {
-            if (storageErrorShown) return;
-            storageErrorShown = true;
-            setTimeout(() => window.alert('数据保存失败。请保留当前窗口，并检查磁盘空间和数据目录权限。\nData could not be saved. Keep this window open and check disk space and permissions.'), 0);
-        };
         const readStorageTextWithSqliteFirst = (key) => {
             const k = String(key || '').trim();
             if (!k) return '';
@@ -212,6 +210,7 @@
                 // only after persistence succeeds. Do not write the same row twice.
                 appStorage.setItem(key, text);
                 FASTGC_STORAGE_SNAPSHOT[key] = text;
+                storageErrorShown = false;
                 return true;
             } catch (_) { notifyStorageFailure(); return false; }
         };
