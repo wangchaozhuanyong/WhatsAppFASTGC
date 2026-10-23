@@ -860,9 +860,10 @@ ipcMain.handle('fastgc:wa-js-bundle', () => {
   }
 });
 
-ipcMain.handle('fastgc:clipboard-write-text', (_event, text) => {
-  const value = String(text || '').trim();
-  if (!value) return { ok: false, error: 'EMPTY' };
+ipcMain.handle('fastgc:clipboard-write-text', (event, text) => {
+  if (!isTrustedTranslationSender(event)) return { ok: false, error: 'FORBIDDEN' };
+  const value = String(text ?? '');
+  if (!value.trim()) return { ok: false, error: 'EMPTY' };
   try {
     clipboard.writeText(value);
     return { ok: true };
@@ -871,7 +872,8 @@ ipcMain.handle('fastgc:clipboard-write-text', (_event, text) => {
   }
 });
 
-ipcMain.handle('fastgc:clipboard-write-image-buffer', (_event, payload = {}) => {
+ipcMain.handle('fastgc:clipboard-write-image-buffer', (event, payload = {}) => {
+  if (!isTrustedTranslationSender(event)) return { ok: false, error: 'FORBIDDEN' };
   try {
     const raw = payload && payload.bytes;
     const buffer = Buffer.isBuffer(raw)
@@ -892,11 +894,20 @@ ipcMain.handle('fastgc:clipboard-write-image-buffer', (_event, payload = {}) => 
   }
 });
 
-const isTranslationSettingsHost = event => {
-  const expected = pathToFileURL(path.join(__dirname, 'index.html')).href;
-  return event.senderFrame === event.sender.mainFrame && event.sender.getURL().split(/[?#]/)[0] === expected;
-};
-ipcMain.on('fastgc:translate-policy', event => { event.returnValue = cloudTranslation.getPolicy(); });
+function isTranslationSettingsHost(event) {
+  try {
+    const expected = pathToFileURL(path.join(__dirname, 'index.html')).href;
+    return event.senderFrame === event.sender.mainFrame && event.sender.getURL().split(/[?#]/)[0] === expected;
+  } catch (_) { return false; }
+}
+function isTrustedTranslationSender(event) {
+  if (isTranslationSettingsHost(event)) return true;
+  try {
+    const url = new URL(event.senderFrame.url);
+    return event.senderFrame === event.sender.mainFrame && event.sender.getType() === 'webview' && url.protocol === 'https:' && url.hostname === 'web.whatsapp.com';
+  } catch (_) { return false; }
+}
+ipcMain.on('fastgc:translate-policy', event => { event.returnValue = isTrustedTranslationSender(event) ? cloudTranslation.getPolicy() : { ok: false, error: 'FORBIDDEN' }; });
 ipcMain.handle('app:get-cloud-translation', event => isTranslationSettingsHost(event) ? cloudTranslation.getStatus() : { ok: false, error: 'FORBIDDEN' });
 ipcMain.handle('app:set-cloud-translation', (event, payload = {}) => isTranslationSettingsHost(event) ? cloudTranslation.saveConfig(payload) : { ok: false, error: 'FORBIDDEN' });
 ipcMain.handle('app:check-cloud-translation', async event => {
@@ -905,7 +916,9 @@ ipcMain.handle('app:check-cloud-translation', async event => {
   return { ...result, settings: cloudTranslation.getStatus() };
 });
 
-ipcMain.handle('fastgc:google-translate', async (_event, payload = {}) => {
+ipcMain.handle('fastgc:google-translate', async (event, payload = {}) => {
+  if (!isTrustedTranslationSender(event)) return { ok: false, error: 'FORBIDDEN', noFallback: true };
+  if (!isPlainObject(payload)) return { ok: false, error: 'INVALID_PAYLOAD' };
   if (finalExitStarted) return { ok: false, error: 'APP_CLOSING', noFallback: true };
   const policy = cloudTranslation.getPolicy();
   if (!policy.ok) return { ok: false, error: policy.error, noFallback: true };

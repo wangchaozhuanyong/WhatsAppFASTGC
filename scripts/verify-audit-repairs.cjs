@@ -45,6 +45,13 @@ const cases=[];
  assert.equal(ctx.getStorageDb(),null);assert.equal(closed,1);assert.equal(ctx.getStorageDb(),null);assert.equal(closed,1);clock+=3001;assert.equal(ctx.getStorageDb(),null);assert.equal(closed,2);
  cases.push('failed SQLite initialization closes its handle and retries with backoff');
 
+ const trust={path,__dirname:root,URL,pathToFileURL:require('node:url').pathToFileURL};vm.createContext(trust);
+ vm.runInContext(fn('isTranslationSettingsHost')+'\n'+fn('isTrustedTranslationSender'),trust);
+ const frame={url:'https://web.whatsapp.com/'};const event={senderFrame:frame,sender:{mainFrame:frame,getURL:()=>frame.url,getType:()=> 'webview'}};
+ assert.equal(trust.isTrustedTranslationSender(event),true);frame.url='https://attacker.invalid/';assert.equal(trust.isTrustedTranslationSender(event),false);
+ frame.url='http://web.whatsapp.com/';assert.equal(trust.isTrustedTranslationSender(event),false);frame.url='https://web.whatsapp.com/';event.senderFrame={url:frame.url};assert.equal(trust.isTrustedTranslationSender(event),false);assert.equal(trust.isTrustedTranslationSender(null),false);
+ cases.push('translation/clipboard IPC restricted to trusted main frames; destroyed senders rejected');
+
  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');const start=html.indexOf('const readStorageTextWithSqliteFirst =');const end=html.indexOf('/** 左侧「号码奖励管理」',start);
  let writes=0,errors=0,fail=false;const values=new Map();
  const render={appStorage:{getItem:k=>values.get(k)??null,setItem(k,v){if(fail)throw Error('disk failed');writes++;values.set(k,v)}},FASTGC_STORAGE_SNAPSHOT:{fastgc_global_inbox:'stale'},notifyStorageFailure:()=>errors++};
