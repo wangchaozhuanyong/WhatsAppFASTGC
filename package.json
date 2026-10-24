@@ -1,6 +1,6 @@
 {
   "name": "fastgc-whatsapp-shell",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "private": true,
   "author": "FastGC",
   "description": "FastGC UI shell with embedded WhatsApp Web (Electron webview)",
@@ -11,7 +11,7 @@
     "build:wpp-wa-js": "node scripts/copy-wpp-wa-js.mjs",
     "build:tailwind": "tailwindcss -i ./src/styles/tailwind-input.css -o ./dist/tailwind.css --minify",
     "build:meta": "node scripts/build-meta.mjs",
-    "build:pack-bundles": "npm run build:wa-send-pipeline && npm run build:renderer-ts && npm run build:wpp-wa-js && npm run build:tailwind && npm run build:meta && npm run build:renderer-app",
+    "build:pack-bundles": "npm run build:wa-send-pipeline && npm run build:renderer-ts && npm run build:wpp-wa-js && node scripts/build-seat-preload.mjs && npm run build:tailwind && npm run build:meta && npm run build:renderer-app",
     "ensure:win-pack-output-free": "node scripts/ensure-electron-out-dir-free.mjs",
     "prestart": "npm run build:pack-bundles",
     "predist:win": "npm run test:simulate-phone-and-jump && npm run build:pack-bundles",
@@ -37,7 +37,7 @@
     "test": "npm run test:simulate-phone-and-jump",
     "ci": "npm run build:pack-bundles && npm run test:wa-js-compat && npm run test:member-removal && npm run test:simulate-phone-and-jump && npm run test:simulate-send-translate && npm run test:simulate-host-bridge && node scripts/verify-diagnostics-cleanup.mjs --skip-electron-smoke && npx tsc --noEmit && npm run test:shutdown-flow",
     "build:renderer-app": "node scripts/build-renderer-app.mjs",
-    "test:shutdown-flow": "node scripts/verify-shutdown-flow.cjs && node scripts/verify-session-policy.cjs && node scripts/verify-ui-storage.cjs && node scripts/verify-audit-repairs.cjs && node scripts/verify-whatsapp-permissions.cjs && node scripts/verify-send-conversation.cjs && node scripts/verify-seat-isolation.cjs"
+    "test:shutdown-flow": "node scripts/verify-shutdown-flow.cjs && node scripts/verify-session-policy.cjs && node scripts/verify-ui-storage.cjs && node scripts/verify-audit-repairs.cjs && node scripts/verify-whatsapp-permissions.cjs && node scripts/verify-send-conversation.cjs && node scripts/verify-seat-isolation.cjs && node scripts/verify-seat-environments.cjs"
   },
   "dependencies": {
     "electron-updater": "6.8.9",
@@ -66,6 +66,8 @@
       "main.js",
       "durable-json.js",
       "whatsapp-permissions.js",
+      "seat-environment.js",
+      "seat-fingerprint.js",
       "ui-storage.js",
       "cloud-translation.js",
       "preload.js",

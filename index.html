@@ -7232,6 +7232,12 @@ ${WA_INJECT_TRANSLATE_CORE}
 
         function SeatSetupModal({ layout, onApplyLayout, onClose }) {
             const { t, lang } = useContext(LanguageContext);
+            const [environments, setEnvironments] = useState(null);
+            useEffect(() => {
+                let active = true;
+                window.fastgcBridge?.getSeatEnvironments?.().then(value => { if (active) setEnvironments(value); }).catch(() => { if (active) setEnvironments({ ok: false }); });
+                return () => { active = false; };
+            }, []);
             const [draftLayout, setDraftLayout] = useState(() => normalizeSeatLayout(layout));
             useEffect(() => {
                 setDraftLayout(normalizeSeatLayout(layout));
@@ -7337,6 +7343,16 @@ ${WA_INJECT_TRANSLATE_CORE}
                                 : 'Synced with the seat bar: free seats on the left (drag the ⋮⋮ handle to reorder vertically; don’t drag horizontally inside inputs). One fixed seat on the right. Hover shows full name.'}
                         </p>
                         <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">
+                            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-[11px] text-slate-600 space-y-1">
+                                <div className="font-bold text-slate-800">{lang === 'zh' ? 'FastGC 内置环境' : 'FastGC built-in environments'}</div>
+                                <p>{lang === 'zh' ? '每个席位独立固定的 Canvas、WebGL 图像和离线音频读取特征，重启不随机更换。' : 'Seat-specific, persistent Canvas, WebGL pixel and offline-audio reading characteristics.'}</p>
+                                <p>{lang === 'zh' ? '基础隐私保护：浏览器内核、系统硬件、字体及当前网络出口仍共用，不能等同专业定制指纹内核。' : 'Basic privacy protection. The browser engine, hardware, fonts and network exit remain shared.'}</p>
+                                {!environments ? <p>{lang === 'zh' ? '读取环境状态…' : 'Reading environment status…'}</p> : !environments.ok ? <p className="text-red-600">{lang === 'zh' ? '环境状态读取失败' : 'Unable to read environment status'}</p> : environments.reports.map(row => (
+                                    <div key={row.seat} className={row.ok ? 'text-emerald-700' : 'text-red-600'}>
+                                        {meta[row.seat]?.label || `席位${row.seat}`} · {row.id || '—'} · {row.ok ? (lang === 'zh' ? '已启用' : 'Enabled') : (lang === 'zh' ? '初始化失败' : 'Initialization failed')}
+                                    </div>
+                                ))}
+                            </div>
                             <div>
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="text-[12px] font-bold text-slate-700">{t('seatFreeList')}</span>

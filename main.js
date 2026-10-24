@@ -11,6 +11,7 @@ const { drainSessionsForExit, settlePendingRequests } = require('./shutdown-flow
 const { createBackend: createUiStorageBackend } = require('./ui-storage');
 const { writeTextDurably, writeJsonDurably } = require('./durable-json');
 const { createWhatsAppPermissionPolicy } = require('./whatsapp-permissions');
+const { createSeatEnvironmentStore } = require('./seat-environment');
 
 /** 与 package.json build.appId 一致：任务栏分组、快捷方式关联、单实例锁 */
 const APP_ID = 'com.fastgc.whatsapp.shell';
@@ -87,6 +88,38 @@ const DIAGNOSTIC_LOG_MAX_BYTES = 512 * 1024;
 const RENDER_RECOVERY_WINDOW_MS = 5 * 60 * 1000;
 const RENDER_RECOVERY_MAX_ATTEMPTS = 2;
 const RUNTIME_STARTED_AT = Date.now();
+const seatEnvironmentStore = createSeatEnvironmentStore({ userDataDir: () => app.getPath('userData') });
+const seatEnvironmentReports = new Map();
+
+function environmentForContents(contents) {
+  if (!contents || contents.isDestroyed() || contents.getType() !== 'webview') throw new Error('FORBIDDEN');
+  const directory = contents.session.storagePath;
+  if (!directory) throw new Error('FORBIDDEN');
+  return seatEnvironmentStore.profile(path.basename(directory));
+}
+
+ipcMain.on('fastgc:seat-environment-profile', event => {
+  try {
+    if (!isTrustedTranslationSender(event) || event.senderFrame !== event.sender.mainFrame) throw new Error('FORBIDDEN');
+    event.returnValue = { ok: true, profile: environmentForContents(event.sender) };
+  } catch (_) { event.returnValue = { ok: false, error: 'SEAT_ENVIRONMENT_UNAVAILABLE' }; }
+});
+ipcMain.on('fastgc:seat-environment-status', (event, status) => {
+  try {
+    if (!isTrustedTranslationSender(event) || event.senderFrame !== event.sender.mainFrame || event.sender.getType() !== 'webview') return;
+    const name = path.basename(event.sender.session.storagePath || '');
+    const match = /^fastgc-wa-seat-([1-9]\d?)(?:-[a-f0-9]{32})?$/.exec(name);
+    if (!match || Number(match[1]) > 50) return;
+    let profile, installed = status?.ok === true;
+    try { profile = environmentForContents(event.sender); } catch (_) { installed = false; profile = { seat: match[1], id: '' }; }
+    seatEnvironmentReports.set(event.sender.id, { seat: profile.seat, id: profile.id, ok: installed, features: { canvas: status?.features?.canvas === true, webgl: status?.features?.webgl === true, offlineAudio: status?.features?.offlineAudio === true } });
+    if (!installed) {
+      const contents = event.sender;
+      setImmediate(() => { if (!contents.isDestroyed()) { contents.stop(); void contents.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<meta charset="utf-8"><p>席位环境初始化失败，已停止加载 WhatsApp。请重启软件或检查数据目录权限。</p>')); } });
+    }
+  } catch (_) {}
+});
+ipcMain.handle('app:get-seat-environments', event => isTranslationSettingsHost(event) ? { ok: true, mode: 'builtin-basic-privacy', hardwareShared: true, network: 'system', reports: [...seatEnvironmentReports.values()] } : { ok: false, error: 'FORBIDDEN' });
 
 let updateListenersAttached = false;
 let taskbarUnreadCount = 0;
@@ -863,7 +896,7 @@ ipcMain.handle('app:wa-webview-devtools-enabled', () => String(process.env.FASTG
 
 ipcMain.handle('app:webview-translate-preload-url', () => {
   try {
-    const abs = path.resolve(__dirname, 'webview-translate-preload.js');
+    const abs = path.resolve(__dirname, 'dist', 'webview-translate-preload.js');
     // Electron <webview> 的 preload 需绝对路径；file:// URL 在部分版本下无法加载，会导致翻译桥接失效
     return abs.replace(/\\/g, '/');
   } catch (_) {
@@ -1747,6 +1780,8 @@ app.whenReady().then(() => {
   writeDiagnosticLog('runtime-started', { userDataPath: app.getPath('userData'), managedExecutionEnvironment: Boolean(process.env.CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY), diagnosticMode: process.argv.some(arg => arg.startsWith('--remote-debugging-port')) });
   attachWhatsAppPartitionBehavior(session.fromPartition(WINDOW_PARTITION));
   app.on('web-contents-created', (_event, contents) => {
+    const contentsId = contents.id;
+    contents.once('destroyed', () => seatEnvironmentReports.delete(contentsId));
     /** 仅 WA 内嵌 <webview> 的 guest：勿绑到主窗口 file:// 壳，否则 window.open/跳转误命中会把整壳 loadURL 成 WhatsApp 全页，看起来像卡住退不出 */
     try {
       if (typeof contents.getType === 'function' && contents.getType() !== 'webview') return;

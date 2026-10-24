@@ -72,6 +72,9 @@ contextBridge.exposeInMainWorld('fastgcBridge', {
   getRuntimeSnapshot() {
     return ipcRenderer.invoke('app:get-runtime-snapshot');
   },
+  getSeatEnvironments() {
+    return ipcRenderer.invoke('app:get-seat-environments');
+  },
   clearTranslateCache() {
     return ipcRenderer.invoke('app:clear-translate-cache');
   },
