@@ -86,7 +86,15 @@ const expression=`(async()=>{
   if(title&&p(title).onDoubleClick){await click(title,'onDoubleClick');assert(contentSends[0]==='中文正文','Content language route');}
   const del=[...fixture.querySelectorAll('tbody button')].at(-1);
   assert(del,'Content delete action');await click(del);failWrites=true;await click(button('confirmBtn'));assert(data(CONTENT_MANAGER_STORAGE_KEY).records.length===1&&fixture.textContent.includes('中文标题'),'Content failed delete retains UI');failWrites=false;
-  await click(del);await click(button('confirmBtn'));assert(data(CONTENT_MANAGER_STORAGE_KEY).records.length===0,'Content delete durable');cases.push('content drawer: load, language route with send mock, failed-delete UI retention, successful durable delete');
+  await click(del);await click(button('confirmBtn'));assert(data(CONTENT_MANAGER_STORAGE_KEY).records.length===0,'Content delete durable');
+  await click(button('addContent'));await input(fixture.querySelectorAll('input')[1],'New Chinese title');await input(fixture.querySelectorAll('input')[2],'New English title');await input(fixture.querySelectorAll('textarea')[0],'New English body');await input(fixture.querySelectorAll('textarea')[1],'新中文正文');
+  failWrites=true;await click(button('saveContent'));assert(fixture.querySelector('textarea')&&data(CONTENT_MANAGER_STORAGE_KEY).records.length===0,'Content failed save retains form');failWrites=false;await click(button('saveContent'));assert(data(CONTENT_MANAGER_STORAGE_KEY).records.length===1,'Content add persists');
+  await click([...fixture.querySelectorAll('tbody button')].at(-2));await input(fixture.querySelector('textarea'),'Edited content');await click(button('saveContent'));assert(data(CONTENT_MANAGER_STORAGE_KEY).records[0].content==='Edited content','Content edit persists');
+  await click([...fixture.querySelectorAll('tbody button')].at(-1));await click(button('confirmBtn'));
+  await click(button('categoryManageTitle'));await input(fixture.querySelector('input[placeholder=categoryPlaceholder]'),'Added category');await click(button('confirmCreate'));assert(data(CONTENT_MANAGER_STORAGE_KEY).categories.length===2,'Category add');
+  const categoryInputs=[...fixture.querySelectorAll('input')].filter(n=>n.placeholder!=='searchContentPlaceholder'&&n.placeholder!=='categoryPlaceholder');await input(categoryInputs.at(-1),'Renamed category');assert(data(CONTENT_MANAGER_STORAGE_KEY).categories.at(-1).name==='Renamed category','Category rename');
+  await click([...fixture.querySelectorAll('button[title=deleteRecord]')].at(-1));await click(button('confirmBtn'));assert(data(CONTENT_MANAGER_STORAGE_KEY).categories.length===1&&data(CONTENT_MANAGER_STORAGE_KEY).records.length===0,'Category delete');
+  cases.push('content and categories: add/edit/delete, language route with send mock, failed-save form retention and durable save');
   let appliedLayout=null,seatEditorClosed=0;await mount('SeatSetupModal',{layout:readSeatLayout(),onClose:()=>seatEditorClosed++,onApplyLayout:next=>{if(failWrites)return false;appliedLayout=components.writeSeatLayout(next);return Boolean(appliedLayout)}});
   const oldLayout=readSeatLayout();await click([...fixture.querySelectorAll('button')].find(b=>b.textContent.includes('seatAdd')));
   await input(fixture.querySelector('input'),'Renamed fixture seat');
