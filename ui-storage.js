@@ -7,6 +7,7 @@
   const retiredKeys = ['fastgc_api_config', 'fastgc_crm_right_panel_width_px', 'fastgc_crm_right_panel_collapsed'];
   const isKey = key => typeof key === 'string' && !retiredKeys.includes(key) && /^(fastgc_[a-z0-9_]{1,100}|__fastgc_sqlite_migration_v1__|__fastgcWaPhoneRequestTokenSeed|content_manager_data|reward_phone_system_data)$/.test(key);
   function createBackend(getDb) {
+    const stats = { mutations: 0, writes: 0, failures: 0, byKey: {} };
     const snapshot = () => {
       const db = getDb();
       if (!db) return { ok: false, error: 'STORAGE_UNAVAILABLE' };
@@ -16,6 +17,7 @@
     };
     return {
       snapshot,
+      getStats: () => ({ ...stats, byKey: { ...stats.byKey } }),
       migrate(items) {
         const db = getDb();
         if (!db || !Array.isArray(items) || items.some(item => !isKey(item?.key) || typeof item.value !== 'string')) return { ok: false, error: 'INVALID_MIGRATION' };
@@ -30,13 +32,16 @@
         } catch (_) { try { db.exec('ROLLBACK'); } catch (_) {} return { ok: false, error: 'MIGRATION_FAILED' }; }
       },
       mutate(key, value, remove) {
+        stats.mutations++;
         const db = getDb();
         if (!db || !isKey(key) || (!remove && typeof value !== 'string')) return { ok: false, error: 'INVALID_STORAGE_WRITE' };
         try {
-          if (remove) db.prepare('DELETE FROM app_kv WHERE key=?').run(key);
-          else db.prepare('INSERT INTO app_kv(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').run(key, value, Date.now());
+          const result = remove ? db.prepare('DELETE FROM app_kv WHERE key=?').run(key) :
+            db.prepare('INSERT INTO app_kv(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at WHERE app_kv.value IS NOT excluded.value').run(key, value, Date.now());
+          const changed = Number(result.changes) > 0;
+          if (changed) { stats.writes++; stats.byKey[key] = (stats.byKey[key] || 0) + 1; }
           return { ok: true };
-        } catch (_) { return { ok: false, error: 'STORAGE_WRITE_FAILED' }; }
+        } catch (_) { stats.failures++; return { ok: false, error: 'STORAGE_WRITE_FAILED' }; }
       },
     };
   }

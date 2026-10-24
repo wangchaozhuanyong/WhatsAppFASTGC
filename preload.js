@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld('fastgcBridge', {
   getDiagnosticsSnapshot() {
     return ipcRenderer.invoke('app:get-diagnostics-snapshot');
   },
+  getRuntimeSnapshot() {
+    return ipcRenderer.invoke('app:get-runtime-snapshot');
+  },
   clearTranslateCache() {
     return ipcRenderer.invoke('app:clear-translate-cache');
   },

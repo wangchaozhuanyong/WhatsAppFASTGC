@@ -10,6 +10,7 @@ const { armWindowsShutdownGuard } = require('./shutdown-guard');
 const { drainSessionsForExit, settlePendingRequests } = require('./shutdown-flow');
 const { createBackend: createUiStorageBackend } = require('./ui-storage');
 const { writeTextDurably, writeJsonDurably } = require('./durable-json');
+const { createWhatsAppPermissionPolicy } = require('./whatsapp-permissions');
 
 /** 与 package.json build.appId 一致：任务栏分组、快捷方式关联、单实例锁 */
 const APP_ID = 'com.fastgc.whatsapp.shell';
@@ -85,6 +86,7 @@ const DIAGNOSTIC_LOG_FILE = 'fastgc-diagnostics.log';
 const DIAGNOSTIC_LOG_MAX_BYTES = 512 * 1024;
 const RENDER_RECOVERY_WINDOW_MS = 5 * 60 * 1000;
 const RENDER_RECOVERY_MAX_ATTEMPTS = 2;
+const RUNTIME_STARTED_AT = Date.now();
 
 let updateListenersAttached = false;
 let taskbarUnreadCount = 0;
@@ -762,17 +764,24 @@ function attachWhatsAppPartitionBehavior(ses) {
   const chromeMajor = (process.versions.chrome || '131').split('.')[0];
   const secChUa = `"Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}", "Not-A.Brand";v="24"`;
   ses.setUserAgent(ua);
-  const waEmbedAllowPermissions = [
-    'notifications',
-    /** 默认仅保留基础剪贴板写入能力；敏感权限不默认放开 */
-    'clipboard-sanitized-write',
-  ];
-  ses.setPermissionRequestHandler((wc, permission, callback) => {
-    const pageUrl = String((wc && typeof wc.getURL === 'function' && wc.getURL()) || '').trim();
-    callback(waEmbedAllowPermissions.includes(permission) && isWhatsAppEmbeddedNavigationUrl(pageUrl));
+  const permissions = createWhatsAppPermissionPolicy({ requestApproval: async ({ mediaTypes }) => {
+    const english = appUiLocale === 'en';
+    const devices = mediaTypes.map(type => type === 'audio' ? (english ? 'microphone' : '麦克风') : (english ? 'camera' : '摄像头')).join(english ? ' and ' : '和');
+    const options = {
+      type: 'question', title: 'FastGC WhatsApp',
+      message: english ? `Allow WhatsApp to use your ${devices}?` : `是否允许 WhatsApp 使用${devices}？`,
+      detail: english ? 'Applies to this seat and page only. Closing or reloading the page clears this permission.' : '仅对当前席位和页面生效，关闭或重新加载页面后需再次允许。',
+      buttons: english ? ['Allow', 'Cancel'] : ['允许', '取消'], defaultId: 1, cancelId: 1,
+    };
+    const owner = BrowserWindow.getAllWindows().find(window => !window.isDestroyed());
+    const answer = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+    return answer.response === 0;
+  } });
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    permissions.request(wc, permission, callback, details);
   });
   try {
-    ses.setPermissionCheckHandler((_wc, permission) => waEmbedAllowPermissions.includes(permission));
+    ses.setPermissionCheckHandler((wc, permission, origin, details) => permissions.check(wc, permission, origin, details));
   } catch (_) {}
   // 部分环境下仅靠 setUserAgent 仍会在请求里带上 Electron；对 WhatsApp 相关域强制标准 Chrome UA
   const filter = {
@@ -828,6 +837,24 @@ ipcMain.handle('app:get-app-version', () => {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+});
+
+ipcMain.handle('app:get-runtime-snapshot', event => {
+  if (!isTranslationSettingsHost(event)) return { ok: false, error: 'FORBIDDEN' };
+  let recentLifecycle = [];
+  try {
+    recentLifecycle = fs.readFileSync(diagnosticLogPath(), 'utf8').split(/\r?\n/).filter(Boolean)
+      .map(line => { try { return JSON.parse(line); } catch (_) { return null; } })
+      .filter(row => row && /^(shutdown-|runtime-started|window-close)/.test(row.event)).slice(-20);
+  } catch (_) {}
+  return {
+    ok: true, version: app.getVersion(), pid: process.pid, startedAt: RUNTIME_STARTED_AT,
+    managedExecutionEnvironment: Boolean(process.env.CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY),
+    diagnosticMode: process.argv.some(arg => arg.startsWith('--remote-debugging-port')),
+    userDataPath: app.getPath('userData'), memoryUsage: process.memoryUsage(),
+    processes: app.getAppMetrics().map(item => ({ pid: item.pid, type: item.type, cpuPercent: item.cpu.percentCPUUsage, workingSetKB: item.memory.workingSetSize, privateKB: item.memory.privateBytes })),
+    storage: uiStorageBackend.getStats(), recentLifecycle,
+  };
 });
 
 /** 排障：FASTGC_WA_WEBVIEW_DEVTOOLS=1 时 WhatsApp 嵌入 webview 在 dom-ready 自动打开开发者工具 */
@@ -1474,6 +1501,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  win.on('close', () => writeDiagnosticLog('window-close-requested'));
 
   if (accessAllowed) {
     win.loadFile(path.join(__dirname, 'index.html'));
@@ -1715,6 +1743,7 @@ app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
   }
   appUiLocale = readUiLocaleSync();
+  writeDiagnosticLog('runtime-started', { userDataPath: app.getPath('userData'), managedExecutionEnvironment: Boolean(process.env.CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY), diagnosticMode: process.argv.some(arg => arg.startsWith('--remote-debugging-port')) });
   attachWhatsAppPartitionBehavior(session.fromPartition(WINDOW_PARTITION));
   app.on('web-contents-created', (_event, contents) => {
     /** 仅 WA 内嵌 <webview> 的 guest：勿绑到主窗口 file:// 壳，否则 window.open/跳转误命中会把整壳 loadURL 成 WhatsApp 全页，看起来像卡住退不出 */
@@ -1772,6 +1801,7 @@ app.on('before-quit', event => {
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin' || finalExitStarted) return;
   finalExitStarted = true;
+  writeDiagnosticLog('window-all-closed');
   void (async () => {
     const pending = [...inflightGoogleTranslateByKey.values()];
     const cancelledCloud = cloudTranslation.cancelPending();

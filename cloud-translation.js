@@ -67,7 +67,16 @@ function createCloudTranslation({ userDataDir, safeStorage, fetchImpl }) {
     const provider = payload.provider;
     if (!['web', 'google-cloud-nmt'].includes(provider)) return failure('CLOUD_INVALID_PROVIDER');
     const projectId = String(payload.projectId || '').trim();
-    const key = String(payload.apiKey || '').trim();
+    let key = String(payload.apiKey || '').trim();
+    // Restore only an existing Windows-protected key. Plaintext never crosses
+    // the renderer when transferring settings between local launch contexts.
+    if (payload.protectedKey !== undefined) {
+      if (key || typeof payload.protectedKey !== 'string' || !/^[A-Za-z0-9+/]{20,4096}={0,2}$/.test(payload.protectedKey)) return failure('CLOUD_INVALID_PROTECTED_KEY');
+      try {
+        if (!safeStorage.isEncryptionAvailable()) return failure('CLOUD_ENCRYPTION_UNAVAILABLE');
+        key = safeStorage.decryptString(Buffer.from(payload.protectedKey, 'base64'));
+      } catch (_) { return failure('CLOUD_KEY_UNREADABLE'); }
+    }
     const limit = Number(payload.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > DEFAULT_LIMIT) return failure('CLOUD_INVALID_LIMIT');
     if (provider === 'google-cloud-nmt' && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) return failure('CLOUD_INVALID_PROJECT');
@@ -83,6 +92,17 @@ function createCloudTranslation({ userDataDir, safeStorage, fetchImpl }) {
       if (provider === 'google-cloud-nmt') {
         // The ledger is shared across keys and providers; rotating keys cannot reset the limit.
         const usage = readUsage();
+        if (payload.protectedKey !== undefined && payload.minimumUsedCharacters !== undefined) {
+          const minimum = payload.minimumUsedCharacters;
+          if (!Number.isSafeInteger(minimum) || minimum < 0 || minimum > DEFAULT_LIMIT) return failure('CLOUD_INVALID_USAGE');
+          const used = recentBuckets(usage).reduce((sum, row) => sum + row[1], 0);
+          if (minimum > used) {
+            const hour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+            const bucket = usage.buckets.find(row => row[0] === hour);
+            if (bucket) bucket[1] += minimum - used;
+            else usage.buckets.push([hour, minimum - used]);
+          }
+        }
         writeJson(USAGE_FILE, usage);
         next.usageRequired = true;
       }

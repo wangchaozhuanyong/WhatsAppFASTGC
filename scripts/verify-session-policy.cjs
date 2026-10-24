@@ -5,7 +5,7 @@ const end=source.indexOf('\n/** 与 index.html normalizePhone',start);
 assert.ok(start>=0&&end>start);
 const hooks=[],activeBrowserSessions=new Set();
 const ses={setUserAgent(){},setPermissionRequestHandler(){},setPermissionCheckHandler(){},webRequest:{onBeforeSendHeaders(filter,fn){hooks.push({filter,fn})},onBeforeRequest(){}}};
-const sandbox={activeBrowserSessions,process:{versions:{chrome:'156.0.0.0'}},chromeLikeUserAgent:()=> 'Chrome/156.0.0.0',acceptLanguageForWhatsApp:()=> 'en-US',isWhatsAppEmbeddedNavigationUrl:()=>true};
+const sandbox={createWhatsAppPermissionPolicy:require('../whatsapp-permissions').createWhatsAppPermissionPolicy,activeBrowserSessions,process:{versions:{chrome:'156.0.0.0'}},chromeLikeUserAgent:()=> 'Chrome/156.0.0.0',acceptLanguageForWhatsApp:()=> 'en-US',isWhatsAppEmbeddedNavigationUrl:()=>true};
 vm.createContext(sandbox);vm.runInContext(source.slice(start,end),sandbox);
 sandbox.attachWhatsAppPartitionBehavior(ses);sandbox.attachWhatsAppPartitionBehavior(ses);
 assert.equal(hooks.length,1);assert.equal(activeBrowserSessions.size,1);
