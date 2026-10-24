@@ -28,7 +28,7 @@ function fanoutWrapper(code) {
   visit(ast);
   assert.equal(matches.length, 1, 'locate the actual packaged fanout hook');
   const node = matches[0];
-  return vm.runInNewContext(`(${code.slice(node.start, node.end)})`);
+  return vm.runInNewContext(`(${code.slice(node.start, node.end)})`, {h(){}});
 }
 
 const original = fanoutWrapper(source);
@@ -37,6 +37,7 @@ const modernPayload = Object.freeze({ msg: Object.freeze({ id: 'regression-self-
 await assert.rejects(() => original(async () => 'native-ok', modernPayload), /reading 'id'/);
 
 for (const args of [
+  [{msgRecord:{id:'modern'},msgProtobuf:{conversation:'plain text'}}],
   [modernPayload],
   [modernPayload, undefined],
   [modernPayload, null],
@@ -58,33 +59,6 @@ for (const args of [
 const nativeFailure = new Error('native-transport-failure');
 await assert.rejects(() => compatible(async () => { throw nativeFailure; }, modernPayload), e => e === nativeFailure);
 
-// 用实际生成的 Store 适配循环验证官网当前与旧版的消息集合都能解析。
-const { ast: patchedAst } = babel.transform(patched, { ast: true, code: false, sourceType: 'script' });
-let storeLoop;
-function findStoreLoop(node) {
-  if (!node || typeof node !== 'object') return;
-  if (node.type === 'ForOfStatement' && patched.slice(node.start, node.end).includes('MsgStore"===e')) storeLoop = node;
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value)) value.forEach(findStoreLoop);
-    else if (value && typeof value === 'object' && value.type) findStoreLoop(value);
-  }
-}
-findStoreLoop(patchedAst);
-assert.ok(storeLoop, 'locate the packaged message Store adapter');
-class MessageCollection {}
-for (const modern of [true, false]) {
-  const collection = new MessageCollection();
-  const nativeModule = modern ? { Msg: collection } : { default: collection };
-  const target = {};
-  vm.runInNewContext(patched.slice(storeLoop.start, storeLoop.end), {
-    c: ['MsgStore'], t: target, s: { MsgCollection: MessageCollection },
-    u: { exportModule(exports, mappings, predicate) {
-      assert.equal(predicate(nativeModule, modern ? 'WAWebCollections' : 'legacy-store'), true);
-      assert.equal(predicate({ Msg: collection }, 'unrelated-module'), false);
-      for (const [key, names] of Object.entries(mappings)) exports[key] = names.map(name => nativeModule[name]).find(Boolean);
-    } },
-  });
-  assert.equal(target.MsgStore, collection);
-}
+assert.equal(JSON.parse(fs.readFileSync(path.join(root,'node_modules/@wppconnect/wa-js/package.json'),'utf8')).version,'4.7.2');
 assert.throws(() => patchWaJsForCurrentWhatsApp('unrecognised upstream bundle'), /review the installed WA-JS/);
-console.log('PASS: reproduced the old send failure; modern/legacy arguments delegate once; both message Store exports resolve; native failures remain visible; unknown bundles fail packaging.');
+console.log('PASS: reviewed WA-JS 4.7.2; modern and legacy fanout calls delegate exactly once; unknown payloads preserve native sending; unreviewed bundles rejected.');

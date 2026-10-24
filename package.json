@@ -47,7 +47,7 @@
   "devDependencies": {
     "@babel/standalone": "^7.29.3",
     "@tailwindcss/cli": "^4.2.4",
-    "@wppconnect/wa-js": "^4.0.0",
+    "@wppconnect/wa-js": "4.7.2",
     "electron": "45.0.0",
     "electron-builder": "^26.9.0",
     "esbuild": "^0.25.0",
