@@ -69,6 +69,18 @@ declare global {
 
 export const SEND_TRANSLATE_PIPELINE_VERSION = '2026-05-04-send-translate-single-click-listener';
 
+export function captureActiveConversation(): string {
+  try {
+    const chat = window.WPP?.chat?.getActiveChat?.() as { id?: { _serialized?: string; toString?: () => string } } | undefined;
+    const id = chat?.id?._serialized || chat?.id?.toString?.() || '';
+    return /^[^\s@]+@[a-z0-9.]+$/i.test(id) ? id : '';
+  } catch { return ''; }
+}
+
+export function requireActiveConversation(expected: string): void {
+  if (!expected || captureActiveConversation() !== expected) throw new Error('manual-translate-chat-changed');
+}
+
 const DEFER_VERIFY_MS_MIN = 30;
 const DEFER_VERIFY_MS_RANGE = 51;
 const EXCLUSIVE_WATCHDOG_MS = 2000;
@@ -467,7 +479,10 @@ function applyInsertedTextViaTextContent(box: HTMLElement | null, text: string):
 export async function writeTextToWhatsAppInput(
   anchorBox: HTMLElement | null,
   text: string,
+  expectedConversation?: string,
 ): Promise<{ ok: boolean; activeBox: HTMLElement | null }> {
+  const checkConversation = () => { if (expectedConversation !== undefined) requireActiveConversation(expectedConversation); };
+  checkConversation();
   let target = currentComposeBox(anchorBox);
   if (!target)
     return {
@@ -478,16 +493,19 @@ export async function writeTextToWhatsAppInput(
   const want = String(text ?? '');
 
   const attemptWrite = async (): Promise<boolean> => {
+    checkConversation();
     target = currentComposeBox(anchorBox) || currentComposeBox(target);
     if (!target) return false;
 
     /** 与 @wppconnect/wa-js 一致：优先走 WPP 内部 composer，减少 paste 与 React 状态打架 */
     if (await tryWriteComposerViaWpp(want)) {
+      checkConversation();
       target = currentComposeBox(anchorBox) || currentComposeBox(target) || target;
       fgSendDbg('attemptWrite-wpp-setInputText-ok');
       return true;
     }
 
+    checkConversation();
     target.focus();
     selectComposeContents(target);
 
@@ -518,6 +536,7 @@ export async function writeTextToWhatsAppInput(
   try {
     /** 仅一次纯 paste；失败立即走硬兜底，避免把失败状态再扩散一轮。 */
     const okRound = await attemptWrite();
+    checkConversation();
     if (okRound) return { ok: true, activeBox: currentComposeBox(target) || target };
 
     const fallbackBox = currentComposeBox(target) || target;
@@ -535,6 +554,7 @@ export async function writeTextToWhatsAppInput(
     for (let i = 0; i < 2; i++) {
       // eslint-disable-next-line no-await-in-loop
       const okRoundRetry = await attemptWrite();
+      checkConversation();
       if (okRoundRetry) return { ok: true, activeBox: currentComposeBox(target) || target };
       // eslint-disable-next-line no-await-in-loop
       await wait(90 + i * 70);
@@ -958,6 +978,8 @@ export function installFastgcWaSendPipeline(): void {
       const originalNorm = normalizeComposeValue(readComposeText(boxWorking));
       if (!originalNorm) return { ok: false, handled: false, reason: 'manual-translate-empty' };
 
+      const conversation = captureActiveConversation();
+      if (!conversation) return { ok: false, handled: false, reason: 'manual-translate-chat-not-ready' };
       const cfg = getConfig();
       const slNorm = normalizeFastgcTranslateLang(cfg.sourceLang, 'auto');
       const tlNorm = normalizeFastgcTranslateLang(cfg.targetLang || 'en', 'en');
@@ -966,6 +988,7 @@ export function installFastgcWaSendPipeline(): void {
       }
 
       const tm = await translateMessage(originalNorm, slNorm, tlNorm, 125000);
+      requireActiveConversation(conversation);
       if (!tm.ok) {
         notifyNonBlocking('manual-translate-failed', tm.error ?? '');
         return { ok: false, handled: false, reason: `manual-translate-failed:${tm.error ?? ''}` };
@@ -979,7 +1002,7 @@ export function installFastgcWaSendPipeline(): void {
 
       boxWorking.dataset.fastgcTranslating = '1';
       try {
-        const wrote = await writeTextToWhatsAppInput(boxWorking, translated);
+        const wrote = await writeTextToWhatsAppInput(boxWorking, translated, conversation);
         const active = wrote.activeBox || currentComposeBox(boxWorking) || boxWorking;
         if (
           wrote.ok &&
@@ -988,10 +1011,12 @@ export function installFastgcWaSendPipeline(): void {
         ) {
           /* ok */
         } else {
+          requireActiveConversation(conversation);
           applyInsertedTextViaTextContent(active, translated);
           await waitComposeStablePoll(active, translated, 900);
           if (!(await verifyInputStableAfterDeferredMs(active, translated))) {
             const retryBox = currentComposeBox(active) || active;
+            requireActiveConversation(conversation);
             applyInsertedTextViaTextContent(retryBox, translated);
             await waitComposeStablePoll(retryBox, translated, 900);
             if (!(await verifyInputStableAfterDeferredMs(retryBox, translated))) {
@@ -1009,9 +1034,10 @@ export function installFastgcWaSendPipeline(): void {
       }
 
       return { ok: true, handled: true, translated };
-    } catch {
-      notifyNonBlocking('manual-translate-error');
-      return { ok: false, handled: false, reason: 'manual-translate-error' };
+    } catch (error) {
+      const reason = error instanceof Error && error.message === 'manual-translate-chat-changed' ? error.message : 'manual-translate-error';
+      notifyNonBlocking(reason);
+      return { ok: false, handled: false, reason };
     }
   };
   window.__fastgcManualTranslateComposer = translateComposerOnly;
@@ -1030,6 +1056,8 @@ export function installFastgcWaSendPipeline(): void {
       const originalNorm = normalizeComposeValue(readComposeText(boxWorking));
       if (!originalNorm) return { ok: false, handled: false, reason: 'manual-translate-empty' };
 
+      const conversation = captureActiveConversation();
+      if (!conversation) return { ok: false, handled: false, reason: 'manual-translate-chat-not-ready' };
       const cfg = getConfig();
       const slNorm = normalizeFastgcTranslateLang(cfg.sourceLang, 'auto');
       const tlNorm = normalizeFastgcTranslateLang(cfg.targetLang || 'en', 'en');
@@ -1038,6 +1066,7 @@ export function installFastgcWaSendPipeline(): void {
       }
 
       const tm = await translateMessage(originalNorm, slNorm, tlNorm, 125000);
+      requireActiveConversation(conversation);
       if (!tm.ok) {
         notifyNonBlocking('manual-translate-failed', tm.error ?? '');
         return { ok: false, handled: false, reason: `manual-translate-failed:${tm.error ?? ''}` };
@@ -1057,6 +1086,7 @@ export function installFastgcWaSendPipeline(): void {
         }
         const bSend = currentComposeBox(boxWorking) || findComposeBox() || boxWorking;
         await wait(30);
+        requireActiveConversation(conversation);
         performWaDomSend(bSend);
         return {
           ok: true,
@@ -1079,19 +1109,21 @@ export function installFastgcWaSendPipeline(): void {
       }
 
       boxWorking.dataset.fastgcTranslating = '1';
-      const wrote = await writeTextToWhatsAppInput(boxWorking, translated);
+      const wrote = await writeTextToWhatsAppInput(boxWorking, translated, conversation);
       let active = wrote.activeBox || currentComposeBox(boxWorking) || boxWorking;
       let applied =
         wrote.ok &&
         (await waitComposeStablePoll(active, translated, 900)) &&
         (await verifyInputStableAfterDeferredMs(active, translated));
       if (!applied) {
-        applyInsertedTextViaTextContent(active, translated);
+        requireActiveConversation(conversation);
+          applyInsertedTextViaTextContent(active, translated);
         await waitComposeStablePoll(active, translated, 900);
         applied = await verifyInputStableAfterDeferredMs(active, translated);
         if (!applied) {
           const retryBox = currentComposeBox(active) || active;
-          applyInsertedTextViaTextContent(retryBox, translated);
+          requireActiveConversation(conversation);
+            applyInsertedTextViaTextContent(retryBox, translated);
           await waitComposeStablePoll(retryBox, translated, 900);
           applied = await verifyInputStableAfterDeferredMs(retryBox, translated);
           if (!applied) {
@@ -1102,11 +1134,13 @@ export function installFastgcWaSendPipeline(): void {
       }
 
       await wait(45);
+      requireActiveConversation(conversation);
       performWaDomSend(active);
       return { ok: true, handled: true, translated, sent: true, unchanged: false, reason: 'manual-translate-sent' };
-    } catch {
-      notifyNonBlocking('manual-translate-error');
-      return { ok: false, handled: false, reason: 'manual-translate-error' };
+    } catch (error) {
+      const reason = error instanceof Error && error.message === 'manual-translate-chat-changed' ? error.message : 'manual-translate-error';
+      notifyNonBlocking(reason);
+      return { ok: false, handled: false, reason };
     } finally {
       const finalEl = currentComposeBox(boxWorking);
       try {

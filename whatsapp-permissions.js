@@ -12,11 +12,13 @@ function createWhatsAppPermissionPolicy({ requestApproval }) {
   const watched = new WeakSet();
   const revisions = new WeakMap();
   const trusted = (contents, origin, details = {}) => {
+    try {
     if (details.isMainFrame === false) return false;
     if (!contents || contents.isDestroyed?.()) return false;
     if (contents.getType?.() !== 'webview' || !isWhatsAppMediaOrigin(contents.getURL?.())) return false;
     return [origin, details.requestingUrl, details.securityOrigin, details.embeddingOrigin]
       .filter(value => value !== undefined && value !== '').every(isWhatsAppMediaOrigin);
+    } catch (_) { return false; }
   };
   const watch = contents => {
     if (watched.has(contents)) return;

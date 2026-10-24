@@ -6659,6 +6659,10 @@ ${WA_INJECT_ROW_COLLECT}
   try {
     var t = ${payload};
     if (!t) return { ok: false, reason: 'empty' };
+    var fastgcReadSendChat = function(){ try { var chat = window.WPP && WPP.chat && WPP.chat.getActiveChat && WPP.chat.getActiveChat(); return chat && chat.id ? (chat.id._serialized || String(chat.id)) : ''; } catch (_) { return ''; } };
+    var fastgcExpectedSendChat = fastgcReadSendChat();
+    if (!fastgcExpectedSendChat) return { ok: false, reason: 'chat-not-ready' };
+    var fastgcRequireSendChat = function(){ if (fastgcReadSendChat() !== fastgcExpectedSendChat) throw new Error('chat-changed'); };
     var sendOpts = ${sendOptsJson};
     var cfg = window.__fastgcSendTranslateConfig || { enabled: true, sourceLang: 'auto', targetLang: 'en' };
     var sourceLang = String((cfg && cfg.sourceLang) || 'auto');
@@ -6723,6 +6727,7 @@ ${WA_INJECT_TRANSLATE_CORE}
       var want = normCompose(expected);
       var deadline = Date.now() + Math.max(200, maxMs || 900);
       while (Date.now() <= deadline) {
+        fastgcRequireSendChat();
         if (readCompose() === want) return true;
         await wait(16);
       }
@@ -6816,10 +6821,12 @@ ${WA_INJECT_TRANSLATE_CORE}
       if (await waitForComposeText(text, sendOpts.composeWriteMs)) return currentBox();
       return null;
     };
+    fastgcRequireSendChat();
     box = (await writeCompose(outText)) || box;
     if (!(await waitForComposeText(outText, sendOpts.composeApplyMs))) return { ok: false, reason: 'compose-not-applied' };
     if (readCompose() !== normCompose(outText)) return { ok: false, reason: 'compose-mismatch' };
     await wait(32);
+    fastgcRequireSendChat();
     var sendBtn = document.querySelector('span[data-icon="send"]');
     if (sendBtn) sendBtn = sendBtn.closest('button');
     if (!sendBtn) sendBtn = document.querySelector('button[data-testid="send"]');
@@ -10592,8 +10599,11 @@ ${WA_INJECT_TRANSLATE_CORE}
                         const i = reason.indexOf(':');
                         return i >= 0 ? reason.slice(i + 1).trim() : '';
                     };
-                    /** 新版本管线：始终以「仍可发送」措辞为主，不出现「本条未发送 / 拦截」式终态 */
-                    if (reason.includes('WEB_RATE_LIMITED') || reason.includes('HTTP_429')) {
+                    if (reason.includes('chat-changed') || reason.includes('chat-not-ready')) {
+                        message = isEn ? 'The chat changed or is not ready. Nothing was sent; return to the intended chat and try again.' : '聊天已切换或尚未就绪，本条未发送。请回到目标聊天后重试。';
+                    } else if (reason.startsWith('script-send-failed')) {
+                        message = isEn ? 'The script could not be sent. Check the current chat and connection before retrying.' : '话术未能发送，请确认当前聊天和网络连接后重试。';
+                    } else if (reason.includes('WEB_RATE_LIMITED') || reason.includes('HTTP_429')) {
                         message = isEn
                             ? 'Google web translation is rate limited. Cached translations remain available. Try later or configure official translation.'
                             : 'Google 网页翻译已被限流，已有缓存仍可使用。请稍后重试，或在管理与配置中接通官方翻译。';
@@ -13229,7 +13239,10 @@ ${WA_INJECT_TRANSLATE_CORE}
             const sendScriptToWhatsApp = async (text, meta = {}) => {
                 const el = getActiveWebview();
                 const payload = String(text || '').trim();
-                if (!isWebviewReady(el) || typeof el.executeJavaScript !== 'function' || !payload) return;
+                if (!isWebviewReady(el) || typeof el.executeJavaScript !== 'function' || !payload) {
+                    showSendTranslateBlockedToast('script-send-failed:not-ready');
+                    return { ok: false, reason: 'not-ready' };
+                }
                 const key = payload.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
                 const now = Date.now();
                 const guard = scriptSendGuardRef.current || { ts: 0, key: '', busy: false };
@@ -13238,8 +13251,12 @@ ${WA_INJECT_TRANSLATE_CORE}
                 scriptSendGuardRef.current = { ts: now, key, busy: true };
                 try {
                     const result = await safeWebviewExecute(el, buildWhatsAppSendScript(payload, { skipSendTranslate: true }), true, 1600, 12000);
-                    if (result && result.ok !== false) markCurrentReplied();
+                    if (result?.ok === true) { markCurrentReplied(); return result; }
+                    showSendTranslateBlockedToast('script-send-failed:' + String(result?.reason || 'no-result'));
+                    return { ok: false, reason: result?.reason || 'no-result' };
                 } catch (_) {
+                    showSendTranslateBlockedToast('script-send-failed:execution');
+                    return { ok: false, reason: 'execution' };
                 } finally {
                     const latest = scriptSendGuardRef.current || { ts: now, key, busy: true };
                     scriptSendGuardRef.current = { ...latest, ts: Date.now(), key, busy: false };

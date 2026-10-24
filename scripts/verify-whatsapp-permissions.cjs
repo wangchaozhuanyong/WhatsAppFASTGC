@@ -20,6 +20,10 @@ const ask = (policy, wc, permission, details) => new Promise(resolve => policy.r
     assert.equal(await ask(policy, wc, 'media', details), false);
   }
   assert.equal(await ask(policy, wc, 'display-capture', audio), false);
+  const broken = contents();broken.getURL = () => { throw Error('destroyed'); };
+  assert.equal(await ask(policy, broken, 'media', audio), false);
+  assert.equal(policy.check(null, 'notifications', 'https://web.whatsapp.com', {}), true);
+  assert.equal(policy.check(null, 'notifications', 'https://attacker.example', {}), false);
   wc.emit('did-navigate');
   assert.equal(policy.check(wc, 'media', wc.getURL(), { mediaType: 'audio' }), false);
   assert.equal(await ask(policy, wc, 'notifications', { requestingUrl: wc.getURL() }), true);

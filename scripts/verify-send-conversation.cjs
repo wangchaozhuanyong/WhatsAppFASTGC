@@ -1,0 +1,24 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const esbuild=require('esbuild'),Babel=require('@babel/standalone');
+const source=fs.readFileSync(path.join(__dirname,'../src/wa/sendTranslatePipeline.ts'),'utf8');
+const ast=Babel.packages.parser.parse(source,{sourceType:'module',plugins:['typescript']});
+let expression;const visit=node=>{if(!node||typeof node!=='object')return;if(node.type==='VariableDeclarator'&&node.id.name==='translateComposerAndSend')expression=source.slice(node.init.start,node.init.end);for(const value of Object.values(node))if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==='object')visit(value)};visit(ast);assert.ok(expression);
+let activeId='first@lid',resolveTranslation,writes=0,sends=0;
+const box={dataset:{},innerText:'Original'};
+const context={module:{exports:{}},window:{WPP:{chat:{getActiveChat:()=>({id:{_serialized:activeId}})}}},setTimeout,clearTimeout,console};
+vm.createContext(context);vm.runInContext(esbuild.transformSync(source,{loader:'ts',format:'cjs'}).code,context);
+Object.assign(context,context.module.exports,{findComposeBox:()=>box,normalizeComposeValue:value=>String(value||'').trim(),readComposeText:()=>box.innerText,getConfig:()=>({sourceLang:'zh',targetLang:'en'}),normalizeFastgcTranslateLang:value=>value,translateMessage:()=>new Promise(resolve=>{resolveTranslation=resolve}),notifyNonBlocking(){},currentComposeBox:()=>box,tryTakeWaSendExclusiveGate:()=>true,wait:async()=>{},performWaDomSend:()=>sends++,scheduleReleaseWaSendExclusive(){},writeTextToWhatsAppInput:async()=>{writes++;return{ok:true,activeBox:box}},waitComposeStablePoll:async()=>true,verifyInputStableAfterDeferredMs:async()=>true});
+vm.runInContext(esbuild.transformSync('globalThis.pipeline='+expression,{loader:'ts',format:'iife'}).code,context);
+const deadline=setTimeout(()=>{console.error('Conversation regression did not finish');process.exitCode=1},4000);
+(async()=>{
+ let pending=context.pipeline();activeId='other@lid';resolveTranslation({ok:true,translated:'Translated'});let result=await pending;
+ assert.equal(result.reason,'manual-translate-chat-changed');assert.equal(writes,0);assert.equal(sends,0);
+ activeId='first@lid';pending=context.pipeline();resolveTranslation({ok:true,translated:'Original'});result=await pending;assert.equal(result.sent,true);assert.equal(sends,1);
+ activeId='';result=await context.pipeline();assert.equal(result.reason,'manual-translate-chat-not-ready');assert.equal(sends,1);
+ activeId='first@lid';context.writeTextToWhatsAppInput=async()=>{writes++;activeId='other@lid';return{ok:true,activeBox:box}};pending=context.pipeline();resolveTranslation({ok:true,translated:'Translated'});result=await pending;assert.equal(result.reason,'manual-translate-chat-changed');assert.equal(sends,1);
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),marker='<script type="text/babel">',begin=html.indexOf(marker)+marker.length,jsx=html.slice(begin,html.indexOf('</script>',begin)),tree=Babel.packages.parser.parse(jsx,{sourceType:'script',plugins:['jsx']});
+ const builder=tree.program.body.find(node=>node.type==='FunctionDeclaration'&&node.id.name==='buildWhatsAppSendScript');let reads=0;
+ const quick={WA_INJECT_TRANSLATE_CORE:'',window:{WPP:{chat:{getActiveChat:()=>({id:{_serialized:++reads===1?'first@lid':'other@lid'}})}}},document:{activeElement:{isContentEditable:true,getClientRects:()=>[{}]},querySelectorAll:()=>[]},setTimeout,KeyboardEvent:class{}};quick.WPP=quick.window.WPP;vm.createContext(quick);vm.runInContext(jsx.slice(builder.start,builder.end),quick);
+ const quickResult=await vm.runInContext(quick.buildWhatsAppSendScript('Fixture',{skipSendTranslate:true}),quick);assert.equal(quickResult.ok,false);assert.equal(quickResult.reason,'chat-changed');
+ console.log(JSON.stringify({passed:true,translationSwitchWritesNothing:true,conversationSwitchBeforeSendBlocked:true,unchangedConversationCanSend:true,unknownConversationBlocked:true,quickScriptSwitchBlocked:true,realMessagesSent:0}));
+})().catch(error=>{console.error(error);process.exitCode=1}).finally(()=>clearTimeout(deadline));
