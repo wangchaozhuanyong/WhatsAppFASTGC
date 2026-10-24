@@ -843,7 +843,7 @@ ipcMain.handle('app:get-runtime-snapshot', event => {
   if (!isTranslationSettingsHost(event)) return { ok: false, error: 'FORBIDDEN' };
   let recentLifecycle = [];
   try {
-    recentLifecycle = fs.readFileSync(diagnosticLogPath(), 'utf8').split(/\r?\n/).filter(Boolean)
+    recentLifecycle = fs.readFileSync(diagnosticLogPath(), 'utf8').slice(-32768).split(/\r?\n/).filter(Boolean)
       .map(line => { try { return JSON.parse(line); } catch (_) { return null; } })
       .filter(row => row && /^(shutdown-|runtime-started|window-close)/.test(row.event)).slice(-20);
   } catch (_) {}
@@ -852,6 +852,7 @@ ipcMain.handle('app:get-runtime-snapshot', event => {
     managedExecutionEnvironment: Boolean(process.env.CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY),
     diagnosticMode: process.argv.some(arg => arg.startsWith('--remote-debugging-port')),
     userDataPath: app.getPath('userData'), memoryUsage: process.memoryUsage(),
+    activeSessionCount: activeBrowserSessions.size,
     processes: app.getAppMetrics().map(item => ({ pid: item.pid, type: item.type, cpuPercent: item.cpu.percentCPUUsage, workingSetKB: item.memory.workingSetSize, privateKB: item.memory.privateBytes })),
     storage: uiStorageBackend.getStats(), recentLifecycle,
   };

@@ -1,10 +1,10 @@
 # FastGC WhatsApp
 
-基于 Electron 的 Windows 多账号 WhatsApp 客服工作台。当前版本：**1.0.37**。
+基于 Electron 的 Windows 多账号 WhatsApp 客服工作台。当前版本：**1.0.38**。
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/wangchaozhuanyong/WhatsAppFASTGC/releases/latest) 下载 `FastGC WhatsApp-Setup-1.0.37.exe`，安装后使用桌面 FastGC WhatsApp 快捷方式。
+从 [GitHub Releases](https://github.com/wangchaozhuanyong/WhatsAppFASTGC/releases/latest) 下载 `FastGC WhatsApp-Setup-1.0.38.exe`，安装后使用桌面 FastGC WhatsApp 快捷方式。
 
 安装包不包含账号、聊天记录、管理员密码或翻译密钥。升级保留本机数据；首次使用需要关联自己的 WhatsApp 账号。
 
@@ -41,7 +41,9 @@ Windows 退出先写回缓存、检查点并关闭 SQLite、刷新会话 Cookie�
 
 本版同时补齐功能反馈：内容、号码、链接和席位先确认保存再更新界面，保存失败保留编辑内容；号码库打开时不再写入空列表，导入时同时去除已有和同批重复号码；话术导入校验格式并提示错误；自定义链接校验 HTTP/HTTPS 网址；管理员配置等待保存结果，复制操作等待真实结果。
 
-`npm run ci` 包含16组故障回归。`scripts/verify-functional-ui.mjs` 可对隔离 Electron 测试实例复查实际 React 组件和本地接口，须明确设置 `FASTGC_FUNCTIONAL_PROFILE`（目录名以 `functional-profile-` 开头）及仅监听回环地址的 `FASTGC_FUNCTIONAL_CDP_PORT`。测试会改动该隔离目录的测试话术、号码、权限和设置，请勿指向正式用户目录；发送和复制使用模拟回调，不向联系人发送消息。外部 WhatsApp 附件、音视频和真实多账号长期运行仍需独立验收。
+`npm run ci` 包含17组故障回归及独立媒体权限回归。`scripts/verify-functional-ui.mjs` 可对隔离 Electron 测试实例复查实际 React 组件和本地接口，须明确设置 `FASTGC_FUNCTIONAL_PROFILE`（目录名以 `functional-profile-` 开头）及仅监听回环地址的 `FASTGC_FUNCTIONAL_CDP_PORT`。测试会改动该隔离目录的测试话术、号码、权限和设置，请勿指向正式用户目录；发送和复制使用模拟回调，不向联系人发送消息。外部 WhatsApp 附件、音视频和真实多账号长期运行仍需独立验收。
+
+1.0.38 修复麦克风、摄像头始终被拒绝的问题：仅 WhatsApp 主页面在实际使用时可申请，用户允许后仅当前席位和当前页面获得所选设备权限，取消、跨站、其他席位及页面重新加载均不继承授权。没有默认录音、拍照或拨号。增加桌面实际运行环境诊断、存储写入计数和同值写入去重；可恢复原有 Windows 加密翻译配置并保守保留本地用量。验收必须连接真正由桌面启动的实例，明确区分工具执行环境与桌面实例；相同的目录文字不保证两种执行环境看到的文件状态相同。可信安装包签名仍需要发布者提供有效代码签名证书或签名服务。
 
 ## 打包
 
