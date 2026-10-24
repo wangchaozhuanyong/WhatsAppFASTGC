@@ -51,6 +51,8 @@ WhatsApp 兼容组件固定为官方 WA-JS 4.7.2（2026年10月23日），使用
 
 ## 打包
 
+1.0.39：新建席位（包括删除后重建同一编号）使用随机生成且持久保存的独立登录分区，避免编号复用时自动读入以前的登录。已有席位继续使用原分区，改名、排序、固定和重启不改变登录。不会自动退出、清空或合并其他席位。
+
 ```sh
 npm run build:pack-bundles
 npx electron-builder --win nsis --publish never --config.forceCodeSigning=false --config.win.signAndEditExecutable=false

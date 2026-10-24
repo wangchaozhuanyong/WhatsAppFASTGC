@@ -1,0 +1,22 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict'),{webcrypto}=require('node:crypto');
+const Babel=require('@babel/standalone'),html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8'),marker='<script type="text/babel">',start=html.indexOf(marker)+marker.length,jsx=html.slice(start,html.indexOf('</script>',start)),ast=Babel.packages.parser.parse(jsx,{sourceType:'script',plugins:['jsx']});
+const fn=name=>{const n=ast.program.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name===name);assert.ok(n,name);return n};
+const context={window:{crypto:webcrypto},WA_PARTITION_PREFIX:'persist:fastgc-wa-seat-',FIXED_SEAT_LIST:Array.from({length:50},(_,i)=>({id:String(i+1)}))};vm.createContext(context);
+for(const name of ['createSeatSessionKey','getSeatPartition','normalizeSeatLayout']){const n=fn(name);vm.runInContext(jsx.slice(n.start,n.end),context)}
+const legacy={freeOrder:['1','3'],pinnedSeatId:'2',activeSeatId:'1',meta:{'1':{label:'Private'},'3':{label:'Seat 3'}}};
+assert.equal(context.getSeatPartition('1',context.normalizeSeatLayout(legacy)),'persist:fastgc-wa-seat-1');
+assert.equal(context.getSeatPartition('3',context.normalizeSeatLayout(legacy)),'persist:fastgc-wa-seat-3');
+const a=context.createSeatSessionKey(),b=context.createSeatSessionKey();assert.match(a,/^[a-f0-9]{32}$/);assert.notEqual(a,b);
+const fresh=context.normalizeSeatLayout({...legacy,meta:{...legacy.meta,'3':{label:'Seat 3',sessionKey:a}}});
+assert.notEqual(context.getSeatPartition('3',fresh),context.getSeatPartition('3',legacy));assert.equal(context.getSeatPartition('1',fresh),context.getSeatPartition('1',legacy));
+const roundTrip=context.normalizeSeatLayout(JSON.parse(JSON.stringify(fresh)));assert.equal(context.getSeatPartition('3',roundTrip),context.getSeatPartition('3',fresh));
+roundTrip.meta['3'].label='Renamed';roundTrip.freeOrder=['1'];roundTrip.pinnedSeatId='3';const pinned=context.normalizeSeatLayout(roundTrip);assert.equal(pinned.meta['3'].sessionKey,a);assert.equal(context.getSeatPartition('3',pinned),context.getSeatPartition('3',fresh));
+for(const invalid of ['',null,3,'../seat-1','persist:fastgc-wa-seat-1','a'.repeat(31),'G'.repeat(32)])assert.throws(()=>context.getSeatPartition('3',{meta:{'3':{sessionKey:invalid}}}),/INVALID_SEAT_SESSION_KEY/);
+assert.throws(()=>context.getSeatPartition('51',legacy),/INVALID_SEAT_ID/);
+let add;const visit=n=>{if(!n||typeof n!=='object'||add)return;if(n.type==='VariableDeclarator'&&n.id.name==='addSeat'){add=n.init;return}for(const value of Object.values(n))if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==='object')visit(value)};visit(fn('SeatSetupModal'));assert.ok(add);
+let draft={freeOrder:['1'],pinnedSeatId:'2',activeSeatId:'1',meta:{'1':{label:'Private'},'2':{label:'Seat 2'}}};
+Object.assign(context,{usedIds:new Set(['1','2']),MAX_SEAT_SLOTS:50,lang:'zh',defaultSeatMetaLabel:id=>'Seat '+id,setDraftLayout:updater=>draft=updater(draft),window:{crypto:webcrypto,alert(){throw Error('Unexpected capacity error')}}});
+vm.runInContext('globalThis.addSeat='+jsx.slice(add.start,add.end),context);context.addSeat();const first=draft.meta['3'].sessionKey;assert.match(first,/^[a-f0-9]{32}$/);assert.equal(draft.freeOrder.at(-1),'3');
+draft.freeOrder=['1'];delete draft.meta['3'];context.addSeat();assert.notEqual(draft.meta['3'].sessionKey,first);assert.equal(draft.meta['1'].sessionKey,undefined);
+const column=jsx.slice(fn('WhatsAppWebColumn').start,fn('WhatsAppWebColumn').end),view=jsx.slice(fn('SeatWebview').start,fn('SeatWebview').end);assert.ok(column.includes('partition={getSeatPartition(seatId, seatLayout)}'));assert.ok(view.includes('partition={partition}'));assert.ok(!view.includes('partition={`${WA_PARTITION_PREFIX}${seatId}`}'));
+console.log(JSON.stringify({passed:true,legacyLoginsPreserved:true,newSeatUsesFreshPartition:true,deleteAndRecreateDoesNotReuseLogin:true,renamePinAndRestartPreservePartition:true,malformedKeysFailClosed:true,productionWebviewUsesSessionKey:true,realMessagesSent:0}));

@@ -968,6 +968,23 @@
 
         const defaultSeatMetaLabel = (id, lang) => (lang === 'en' ? `Seat ${id}` : `席位${id}`);
 
+        // Display slots can be reused; authentication storage must not be reused.
+        function createSeatSessionKey() {
+            const bytes = new Uint8Array(16);
+            window.crypto.getRandomValues(bytes);
+            return Array.from(bytes, (n) => n.toString(16).padStart(2, '0')).join('');
+        }
+
+        function getSeatPartition(seatId, layout) {
+            const id = String(seatId);
+            if (!FIXED_SEAT_LIST.some((seat) => seat.id === id)) throw new Error('INVALID_SEAT_ID');
+            const key = layout?.meta?.[id]?.sessionKey;
+            // Existing seats retain their login without copying or moving profiles.
+            if (key === undefined) return `${WA_PARTITION_PREFIX}${id}`;
+            if (typeof key !== 'string' || !/^[a-f0-9]{32}$/.test(key)) throw new Error('INVALID_SEAT_SESSION_KEY');
+            return `${WA_PARTITION_PREFIX}${id}-${key}`;
+        }
+
         function normalizeSeatLayout(raw) {
             const pinnedSeatId = String(raw.pinnedSeatId || '2');
             let freeOrder = (Array.isArray(raw.freeOrder) ? raw.freeOrder : []).map(String).filter((id) => id !== pinnedSeatId);
@@ -980,6 +997,7 @@
                 meta[id] = {
                     label: String(m.label || `席位${id}`).trim() || `席位${id}`,
                     fullName: String(m.fullName || m.label || `席位${id}`).trim(),
+                    ...(Object.prototype.hasOwnProperty.call(m, 'sessionKey') ? { sessionKey: m.sessionKey } : {}),
                 };
             });
             let activeSeatId = String(raw.activeSeatId || '1');
@@ -7258,7 +7276,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                     freeOrder: [...prev.freeOrder, nid],
                     meta: {
                         ...prev.meta,
-                        [nid]: { label: defaultSeatMetaLabel(nid, lang), fullName: defaultSeatMetaLabel(nid, lang) },
+                        [nid]: { label: defaultSeatMetaLabel(nid, lang), fullName: defaultSeatMetaLabel(nid, lang), sessionKey: createSeatSessionKey() },
                     },
                 }));
             };
@@ -9818,7 +9836,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             );
         }
 
-        function SeatWebview({ seatId, activeSeatId, webviewSrc, webpreferences, userAgent, webviewRef, webviewRefsBySeatRef, onWebviewReady, onWebviewEvent }) {
+        function SeatWebview({ seatId, partition, activeSeatId, webviewSrc, webpreferences, userAgent, webviewRef, webviewRefsBySeatRef, onWebviewReady, onWebviewEvent }) {
             const onWebviewReadyRef = useRef(onWebviewReady);
             const onWebviewEventRef = useRef(onWebviewEvent);
             useEffect(() => {
@@ -9953,14 +9971,14 @@ ${WA_INJECT_TRANSLATE_CORE}
                     el.removeEventListener('render-process-gone', onRenderGone);
                     el.removeEventListener('ipc-message', onIpcMessage);
                 };
-            }, [seatId, webpreferences, webviewSrc, userAgent, isActive]);
+            }, [seatId, partition, webpreferences, webviewSrc, userAgent, isActive]);
 
             return (
                 <webview
-                    key={`${seatId}-${webviewSrc}`}
+                    key={`${seatId}-${partition}-${webviewSrc}`}
                     ref={setSeatWebviewRef}
                     src={webviewSrc}
-                    partition={`${WA_PARTITION_PREFIX}${seatId}`}
+                    partition={partition}
                     useragent={userAgent || WA_UA}
                     allowpopups="true"
                     webpreferences={webpreferences}
@@ -9979,7 +9997,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             );
         }
 
-        function WhatsAppWebColumn({ activeSeatId, seatIds, webviewRef, webviewRefsBySeatRef, onWebviewReady, onWebviewEvent, uiLang }) {
+        function WhatsAppWebColumn({ activeSeatId, seatIds, seatLayout, webviewRef, webviewRefsBySeatRef, onWebviewReady, onWebviewEvent, uiLang }) {
             const webviewSrc = waUrlByLang(uiLang);
             const [wvPrefsReady, setWvPrefsReady] = useState(false);
             const [translatePreloadUrl, setTranslatePreloadUrl] = useState('');
@@ -10023,8 +10041,9 @@ ${WA_INJECT_TRANSLATE_CORE}
                 <div className="flex-1 flex flex-col relative bg-[#e5ddd5] min-h-0 min-w-0 border-l border-r border-slate-100 overflow-hidden">
                     {(seatIds || []).map((seatId) => (
                         <SeatWebview
-                            key={`${seatId}-${uiLang}`}
+                            key={`${seatId}-${getSeatPartition(seatId, seatLayout)}-${uiLang}`}
                             seatId={seatId}
+                            partition={getSeatPartition(seatId, seatLayout)}
                             activeSeatId={activeSeatId}
                             webviewSrc={webviewSrc}
                             webpreferences={webpreferences}
@@ -13880,6 +13899,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                                         <WhatsAppWebColumn
                                             activeSeatId={seatLayout.activeSeatId}
                                             seatIds={allMountedSeatIds}
+                                            seatLayout={seatLayout}
                                             webviewRef={webviewRef}
                                             webviewRefsBySeatRef={webviewRefsBySeatRef}
                                             onWebviewReady={handleWebviewReady}
