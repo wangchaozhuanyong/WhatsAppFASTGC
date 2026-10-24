@@ -482,6 +482,8 @@
                 scriptLibraryZh: '中文话术库',
                 scriptLibraryEn: '英文话术库',
                 scriptLibraryStorageError: '话术保存失败，请检查磁盘空间后重试。',
+                invalidLinkUrl: '请输入有效的 HTTP 或 HTTPS 网址。',
+                scriptImportError: '导入失败：请选择包含有效标题和正文的 JSON 话术数组。',
                 rightPanelResizeAria: '拖动调整聊天区与话术库宽度',
                 scriptsPanelCollapse: '收起话术库',
                 scriptsPanelExpand: '展开话术库',
@@ -492,6 +494,7 @@
                 adminConfig: '管理与配置',
                 seatSetup: '座位设置',
                 copySuccess: '复制成功！',
+                copyFailed: '复制失败，请重试。',
                 ipWhitelistTitle: 'IP 白名单限制',
                 ipWhitelistEnable: '启用白名单限制',
                 ipWhitelistHint: '每行一个 IPv4 或网段（如 192.168.1.10 或 192.168.1.0/24）',
@@ -714,6 +717,8 @@
                 scriptLibraryZh: 'Chinese scripts',
                 scriptLibraryEn: 'English scripts',
                 scriptLibraryStorageError: 'Could not save scripts. Check available disk space and try again.',
+                invalidLinkUrl: 'Enter a valid HTTP or HTTPS URL.',
+                scriptImportError: 'Import failed: select a JSON array with valid script titles and body text.',
                 rightPanelResizeAria: 'Drag to resize chat and scripts panel',
                 scriptsPanelCollapse: 'Hide scripts panel',
                 scriptsPanelExpand: 'Show scripts panel',
@@ -724,6 +729,7 @@
                 adminConfig: 'Admin',
                 seatSetup: 'Seats',
                 copySuccess: 'Copied!',
+                copyFailed: 'Could not copy. Please try again.',
                 ipWhitelistTitle: 'IP whitelist restriction',
                 ipWhitelistEnable: 'Enable whitelist restriction',
                 ipWhitelistHint: 'One IPv4 or CIDR per line (e.g. 192.168.1.10 or 192.168.1.0/24)',
@@ -1008,9 +1014,8 @@
             const n = normalizeSeatLayout(layout);
             try {
                 appStorage.setItem(SEAT_LAYOUT_KEY, JSON.stringify(n));
-                appStorage.setItem('fastgc_fixed_seat', n.activeSeatId);
-            } catch (_) {}
-            return n;
+                return n;
+            } catch (_) { return null; }
         }
 
         const getSeatLabel = (seatId, lang = 'zh', layout = null) => {
@@ -6840,20 +6845,56 @@ ${WA_INJECT_TRANSLATE_CORE}
 `;
         }
 
+        async function copyTextToClipboard(text) {
+            const value = String(text || '');
+            if (!value) return false;
+            try {
+                if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return true; }
+            } catch (_) {}
+            const active = document.activeElement;
+            const area = document.createElement('textarea');
+            area.value = value;
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            try { area.select(); return document.execCommand('copy') === true; }
+            catch (_) { return false; }
+            finally { area.remove(); try { active?.focus?.({ preventScroll: true }); } catch (_) {} }
+        }
+
+        function normalizeCustomLinkUrl(raw) {
+            const text = String(raw || '').trim();
+            if (!text) return '';
+            const explicitScheme = /^[a-z][a-z0-9+.-]*:/i.test(text) && !/^[^/\s:]+:\d+(?:[/?#]|$)/.test(text);
+            if (explicitScheme && !/^https?:\/\//i.test(text)) return '';
+            try {
+                const url = new URL(/^https?:\/\//i.test(text) ? text : 'https://' + text);
+                return /^https?:$/.test(url.protocol) && url.hostname && !url.username && !url.password ? url.href : '';
+            } catch (_) { return ''; }
+        }
+
+        function normalizeScriptImport(raw) {
+            if (!Array.isArray(raw) || !raw.length || raw.some(row => !row || typeof row !== 'object' || Array.isArray(row) || typeof row.content !== 'string' || !row.content.trim() || (row.title != null && typeof row.title !== 'string') || (row.id != null && typeof row.id !== 'string'))) throw new Error('INVALID_SCRIPT_IMPORT');
+            return raw.map((row, i) => ({ id: row.id || generateId(), title: String(row.title || ('导入' + (i + 1))).trim(), content: row.content.trim() }));
+        }
+
         function LinkManagerModal({ links, setLinks, onClose }) {
             const { t } = useContext(LanguageContext);
             const [url, setUrl] = useState('');
             const [name, setName] = useState('');
             const [editingId, setEditingId] = useState(null);
+            const [saveError, setSaveError] = useState('');
             const persistLinks = (nl) => {
-                setLinks(nl);
                 const text = JSON.stringify(nl);
-                writeMigratedStorage(CUSTOM_LINKS_STORAGE_KEY, text);
+                if (!writeMigratedStorage(CUSTOM_LINKS_STORAGE_KEY, text)) return false;
+                setLinks(nl);
+                setSaveError('');
+                return true;
             };
             const normalizeUrl = (raw) => {
                 const s = String(raw || '').trim();
                 if (!s) return '';
-                return /^https?:\/\//i.test(s) ? s : 'https://' + s;
+                return normalizeCustomLinkUrl(s);
             };
             const clearForm = () => {
                 setUrl('');
@@ -6863,14 +6904,15 @@ ${WA_INJECT_TRANSLATE_CORE}
             const handleSubmit = () => {
                 const nm = String(name || '').trim();
                 const u = normalizeUrl(url);
-                if (!nm || !u) return;
+                if (!nm) return;
+                if (!u) { setSaveError(t('invalidLinkUrl')); return; }
                 if (editingId) {
                     const nl = links.map((x) => (x.id === editingId ? { ...x, name: nm, url: u } : x));
-                    persistLinks(nl);
+                    if (!persistLinks(nl)) return;
                     clearForm();
                 } else {
                     const nl = [...links, { id: generateId(), url: u, name: nm }];
-                    persistLinks(nl);
+                    if (!persistLinks(nl)) return;
                     setUrl('');
                     setName('');
                 }
@@ -6917,7 +6959,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                                             type="button"
                                             onClick={() => {
                                                 const nl = links.filter((x) => x.id !== l.id);
-                                                persistLinks(nl);
+                                                if (!persistLinks(nl)) return;
                                                 if (editingId === l.id) clearForm();
                                             }}
                                             title={t('deleteRecord')}
@@ -6929,6 +6971,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                                 </div>
                             ))}
                         </div>
+                        {saveError && <p role="alert" className="text-red-600 text-sm mb-2">{saveError}</p>}
                         <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100 space-y-4">
                             <div className="grid grid-cols-2 gap-4">
                                 <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('linkNamePh')} className="border rounded-xl px-4 py-2" />
@@ -7248,7 +7291,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             };
 
             const handleSaveSeatChanges = () => {
-                onApplyLayout(normalizeSeatLayout(draftLayout));
+                if (onApplyLayout(normalizeSeatLayout(draftLayout)) === false) return;
                 onClose();
             };
 
@@ -7944,7 +7987,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                         setNewAccessPassword('');
                         setClearAccessPassword(false);
                     }
-                } catch (error) { window.alert(String(error?.message || error)); }
+                    return true;
+                } catch (error) { window.alert(String(error?.message || error)); return false; }
             };
 
             return (
@@ -8096,7 +8140,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                         </div>
                         )}
                         <div className="flex flex-col gap-2">
-                            <button type="button" onClick={() => { saveConfig(); onClose(); }} className="w-full py-2.5 bg-slate-900 text-white rounded-xl font-bold text-[12px] hover:bg-black">
+                            <button type="button" onClick={async () => { if (await saveConfig()) onClose(); }} className="w-full py-2.5 bg-slate-900 text-white rounded-xl font-bold text-[12px] hover:bg-black">
                                 {t('adminSaveConfig')}
                             </button>
                             <button type="button" onClick={() => { onOpenLinks(); }} className="w-full py-2.5 border border-slate-200 rounded-xl font-bold text-[12px] text-slate-700 hover:bg-slate-50">
@@ -8134,7 +8178,15 @@ ${WA_INJECT_TRANSLATE_CORE}
         /** 左侧「内容与话术库」：与工具箱 ContentManager 一致（localStorage: content_manager_data） */
         function ContentManagerDrawer({ onClose, onCopy, onSend }) {
             const { t, lang } = useContext(LanguageContext);
-            const [data, setData] = useState(() => readContentManagerInitial());
+            const [data, setDataState] = useState(() => readContentManagerInitial());
+            const dataRef = useRef(data);
+            const setData = (updater) => {
+                const next = typeof updater === 'function' ? updater(dataRef.current) : updater;
+                if (!writeMigratedStorage(CONTENT_MANAGER_STORAGE_KEY, JSON.stringify(next))) return false;
+                dataRef.current = next;
+                setDataState(next);
+                return true;
+            };
             const [activeCategoryId, setActiveCategoryId] = useState(() => readContentManagerInitial().categories[0]?.id || null);
             const [searchQuery, setSearchQuery] = useState('');
             const [showRecordModal, setShowRecordModal] = useState(false);
@@ -8238,10 +8290,6 @@ ${WA_INJECT_TRANSLATE_CORE}
             const showConfirm = (message, onOk) => setConfirmOpen({ show: true, message, onOk });
 
             useEffect(() => {
-                try {
-                    const text = JSON.stringify(data);
-                    writeMigratedStorage(CONTENT_MANAGER_STORAGE_KEY, text);
-                } catch (_) {}
                 if (!activeCategoryId && data.categories.length > 0) setActiveCategoryId(data.categories[0].id);
             }, [data, activeCategoryId]);
 
@@ -8282,7 +8330,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                 return { ...prev, records: result };
             };
 
-            const handleCopyRow = (content, itemId = '', e = null) => {
+            const handleCopyRow = async (content, itemId = '', e = null) => {
                 e?.preventDefault?.();
                 e?.stopPropagation?.();
                 const text = String(content || '').trim();
@@ -8292,8 +8340,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                 const guard = contentCopyGuardRef.current || { ts: 0, key: '' };
                 if (guard.key === key && now - Number(guard.ts || 0) < 1200) return;
                 contentCopyGuardRef.current = { ts: now, key };
-                onCopy(text);
-                showAlert(t('copySuccess'));
+                try { showAlert(t((await Promise.resolve(onCopy(text))) === false ? 'copyFailed' : 'copySuccess')); }
+                catch (_) { showAlert(t('copyFailed')); }
             };
 
             const handleDeleteRecord = (id) => {
@@ -8306,21 +8354,21 @@ ${WA_INJECT_TRANSLATE_CORE}
             const handleSaveRecord = (recordData) => {
                 const { desc: _removed, ...rest } = recordData;
                 const next = { ...rest };
-                setData((prev) => {
+                const saved = setData((prev) => {
                     if (next.id) return { ...prev, records: prev.records.map((r) => (r.id === next.id ? next : r)) };
                     return {
                         ...prev,
                         records: [{ ...next, id: generateId(), categoryId: activeCategoryId, date: new Date().toISOString().split('T')[0] }, ...prev.records],
                     };
                 });
-                setShowRecordModal(false);
+                if (saved) setShowRecordModal(false);
             };
 
             const handleAddCategory = () => {
                 const name = newCategoryName.trim();
                 if (!name) return;
                 const newCat = { id: generateId(), name };
-                setData((prev) => ({ ...prev, categories: [...prev.categories, newCat] }));
+                if (!setData((prev) => ({ ...prev, categories: [...prev.categories, newCat] }))) return;
                 setActiveCategoryId(newCat.id);
                 setNewCategoryName('');
             };
@@ -8328,12 +8376,9 @@ ${WA_INJECT_TRANSLATE_CORE}
             const handleDeleteCategory = (id, e) => {
                 e?.stopPropagation?.();
                 showConfirm(t('confirmDelCategory'), () => {
-                    setData((prev) => {
-                        const categories = prev.categories.filter((c) => c.id !== id);
-                        const records = prev.records.filter((r) => r.categoryId !== id);
-                        setActiveCategoryId((cur) => (cur === id ? categories[0]?.id ?? null : cur));
-                        return { categories, records };
-                    });
+                    const categories = dataRef.current.categories.filter((c) => c.id !== id);
+                    const records = dataRef.current.records.filter((r) => r.categoryId !== id);
+                    if (setData({ categories, records })) setActiveCategoryId((cur) => (cur === id ? categories[0]?.id ?? null : cur));
                 });
             };
 
@@ -8984,17 +9029,13 @@ ${WA_INJECT_TRANSLATE_CORE}
                 reader.onload = () => {
                     try {
                         const raw = JSON.parse(String(reader.result || '[]'));
-                        if (!Array.isArray(raw)) return;
-                        const next = raw.map((row, i) => ({
-                            id: row.id || generateId(),
-                            title: row.title || `导入${i + 1}`,
-                            content: row.content || '',
-                        })).filter((row) => row.content);
+                        const next = normalizeScriptImport(raw);
                         const map = new Map(scripts.map((s) => [s.id, s]));
                         next.forEach((s) => map.set(s.id, s));
                         persist(Array.from(map.values()));
-                    } catch (_) {}
+                    } catch (_) { setSaveError(t('scriptImportError')); }
                 };
+                reader.onerror = () => setSaveError(t('scriptImportError'));
                 reader.readAsText(file);
                 event.target.value = '';
             };
@@ -9008,7 +9049,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                 URL.revokeObjectURL(a.href);
             };
 
-            const handleQuickCopy = (e, content, scriptId = '') => {
+            const handleQuickCopy = async (e, content, scriptId = '') => {
                 e.preventDefault();
                 e.stopPropagation();
                 const text = String(content || '').trim();
@@ -9018,7 +9059,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                 const guard = copyGuardRef.current || { ts: 0, key: '' };
                 if (guard.key === key && now - Number(guard.ts || 0) < 900) return;
                 copyGuardRef.current = { ts: now, key };
-                onFill(text);
+                try { if ((await Promise.resolve(onFill(text))) === false) setSaveError(t('copyFailed')); }
+                catch (_) { setSaveError(t('copyFailed')); }
             };
             const handleRowDoubleClick = async (e, content, scriptId = '') => {
                 e.preventDefault();
@@ -9340,7 +9382,20 @@ ${WA_INJECT_TRANSLATE_CORE}
         /** 左侧「号码奖励管理」：与工具箱 PhoneManager 一致（localStorage: reward_phone_system_data），与话术库/会话列表无关 */
         function PhoneRewardsDrawer({ onClose, prefillPhone }) {
             const { t } = useContext(LanguageContext);
-            const [phones, setPhones] = useState([]);
+            const [phones, setPhonesState] = useState(() => {
+                try {
+                    const parsed = JSON.parse(readStorageTextWithSqliteFirst(PHONE_REWARDS_STORAGE_KEY) || '[]');
+                    return (Array.isArray(parsed) ? parsed : []).map(p => ({ ...p, added: Boolean(p?.added) }));
+                } catch (_) { return []; }
+            });
+            const phonesRef = useRef(phones);
+            const setPhones = updater => {
+                const next = typeof updater === 'function' ? updater(phonesRef.current) : updater;
+                if (!writeMigratedStorage(PHONE_REWARDS_STORAGE_KEY, JSON.stringify(next))) return false;
+                phonesRef.current = next;
+                setPhonesState(next);
+                return true;
+            };
             const [searchQuery, setSearchQuery] = useState('');
             const [filterStatus, setFilterStatus] = useState('all');
             const [exportStatus, setExportStatus] = useState('all');
@@ -9350,16 +9405,6 @@ ${WA_INJECT_TRANSLATE_CORE}
             const [alertOpen, setAlertOpen] = useState({ show: false, message: '' });
             const [confirmOpen, setConfirmOpen] = useState({ show: false, message: '', onOk: null });
             const ITEMS_PER_PAGE = 40;
-
-            useEffect(() => {
-                try {
-                    const raw = readStorageTextWithSqliteFirst(PHONE_REWARDS_STORAGE_KEY);
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    setPhones((Array.isArray(parsed) ? parsed : []).map((p) => ({ ...p, added: Boolean(p?.added) })));
-                }
-                } catch (_) {}
-            }, []);
 
             /** 打开抽屉时用右侧/当前会话联系人号码预填搜索（与 + 显示无关，匹配时只看数字） */
             useEffect(() => {
@@ -9371,13 +9416,6 @@ ${WA_INJECT_TRANSLATE_CORE}
                     setCurrentPage(1);
                 }
             }, [prefillPhone]);
-
-            useEffect(() => {
-                try {
-                    const text = JSON.stringify(phones);
-                    writeMigratedStorage(PHONE_REWARDS_STORAGE_KEY, text);
-                } catch (_) {}
-            }, [phones]);
 
             const showAlert = (message) => setAlertOpen({ show: true, message });
             const showConfirm = (message, onOk) => setConfirmOpen({ show: true, message, onOk });
@@ -9423,7 +9461,7 @@ ${WA_INJECT_TRANSLATE_CORE}
 
             const deletePhone = (id) => {
                 showConfirm(t('confirmDelPhone'), () => {
-                    setPhones((prev) => prev.filter((p) => p.id !== id));
+                    if (!setPhones((prev) => prev.filter((p) => p.id !== id))) return;
                     setSelectedIds((prev) => {
                         const next = new Set(prev);
                         next.delete(id);
@@ -9435,7 +9473,7 @@ ${WA_INJECT_TRANSLATE_CORE}
             const deleteSelected = () => {
                 if (selectedIds.size === 0) return;
                 showConfirm(t('confirmDelSelected').replace('{n}', selectedIds.size), () => {
-                    setPhones((prev) => prev.filter((p) => !selectedIds.has(p.id)));
+                    if (!setPhones((prev) => prev.filter((p) => !selectedIds.has(p.id)))) return;
                     setSelectedIds(new Set());
                 });
             };
@@ -9502,9 +9540,14 @@ ${WA_INJECT_TRANSLATE_CORE}
             };
 
             const onImportBatch = (newPhones) => {
-                const existingNormalized = new Set(phones.map((p) => p.normalized));
-                const uniqueNewPhones = newPhones.filter((p) => !existingNormalized.has(p.normalized));
-                setPhones((prev) => [...uniqueNewPhones, ...prev]);
+                const existingNormalized = new Set(phonesRef.current.map((p) => rewardPhoneDigits(p)));
+                const uniqueNewPhones = newPhones.filter((p) => {
+                    const normalized = rewardPhoneDigits(p);
+                    if (!normalized || existingNormalized.has(normalized)) return false;
+                    existingNormalized.add(normalized);
+                    return true;
+                });
+                if (!setPhones((prev) => [...uniqueNewPhones, ...prev])) return;
                 setShowImportModal(false);
                 if (uniqueNewPhones.length < newPhones.length) {
                     showAlert(t('importSuccessFiltered').replace('{n1}', uniqueNewPhones.length).replace('{n2}', String(newPhones.length - uniqueNewPhones.length)));
@@ -10359,8 +10402,8 @@ ${WA_INJECT_TRANSLATE_CORE}
                     next.splice(insertAt, 0, moved);
                     try {
                         const text = JSON.stringify(next);
-                        writeMigratedStorage(CUSTOM_LINKS_STORAGE_KEY, text);
-                    } catch (_) {}
+                        if (!writeMigratedStorage(CUSTOM_LINKS_STORAGE_KEY, text)) return prev;
+                    } catch (_) { return prev; }
                     return next;
                 });
             };
@@ -10865,14 +10908,17 @@ ${WA_INJECT_TRANSLATE_CORE}
 
             const applySeatLayout = (next) => {
                 const written = writeSeatLayout(next);
+                if (!written) return false;
                 seatLayoutRef.current = written;
                 setSeatLayout(written);
+                return true;
             };
 
             const setActiveSeat = (id) => {
                 const sid = String(id);
                 setSeatLayout((prev) => {
                     const next = writeSeatLayout({ ...prev, activeSeatId: sid });
+                    if (!next) return prev;
                     seatLayoutRef.current = next;
                     return next;
                 });
@@ -10945,6 +10991,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                         const [it] = fo.splice(from, 1);
                         fo.splice(to, 0, it);
                         const next = writeSeatLayout({ ...prev, freeOrder: fo });
+                        if (!next) return prev;
                         seatLayoutRef.current = next;
                         return next;
                     });
@@ -13073,19 +13120,7 @@ ${WA_INJECT_TRANSLATE_CORE}
                 });
             };
 
-            const copyToClipboard = (text) => {
-                if (!text) return;
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(text).catch(() => {
-                        const ta = document.createElement('textarea');
-                        ta.value = text;
-                        document.body.appendChild(ta);
-                        ta.select();
-                        try { document.execCommand('copy'); } catch (_) {}
-                        document.body.removeChild(ta);
-                    });
-                }
-            };
+            const copyToClipboard = (text) => copyTextToClipboard(text);
 
             const clampTranslateFabPos = (pos) => {
                 const w = typeof window !== 'undefined' ? window.innerWidth : 1280;

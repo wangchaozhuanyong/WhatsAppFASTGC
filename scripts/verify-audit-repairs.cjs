@@ -85,6 +85,45 @@ const cases=[];
  cases.push('shutdown aborts pending translation without refunding uncertain quota reservations');
  assert.ok(html.includes('result.saved !== items.length'));assert.ok(html.includes("appStorage.getItem(SQLITE_MIGRATION_MARK_KEY) === '1'"));assert.ok(html.includes("r.querySelector('[data-fastgc-error]').textContent = msg"));
  cases.push('migration results checked, redundant startup migration skipped, error text is not HTML');
+
+ const marker='<script type="text/babel">',jsxStart=html.indexOf(marker)+marker.length;
+ const jsx=html.slice(jsxStart,html.indexOf('</script>',jsxStart));
+ const jsxAst=Babel.packages.parser.parse(jsx,{sourceType:'script',plugins:['jsx']});
+ const component=name=>jsxAst.program.body.find(n=>n.type==='FunctionDeclaration'&&n.id.name===name);
+ const nested=(parent,name)=>{
+  let found;const visit=node=>{if(!node||typeof node!=='object'||found)return;if(node.type==='VariableDeclarator'&&node.id.name===name){found=node.init;return}for(const value of Object.values(node))if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==='object')visit(value)};visit(parent);assert.ok(found,name);return jsx.slice(found.start,found.end);
+ };
+ const links={URL,generateId:()=> 'generated-id'};vm.createContext(links);
+ for(const name of ['normalizeCustomLinkUrl','normalizeScriptImport']){const n=component(name);vm.runInContext(jsx.slice(n.start,n.end),links)}
+ assert.equal(links.normalizeCustomLinkUrl('example.com'),'https://example.com/');assert.equal(links.normalizeCustomLinkUrl('localhost:8080/test'),'https://localhost:8080/test');
+ for(const raw of ['javascript:alert(1)','data:text/html,test','file:///C:/','https://','https://user:password@example.com'])assert.equal(links.normalizeCustomLinkUrl(raw),'');
+ for(const raw of [null,{},[],[null],[{content:4}],[{content:'  '}],[{content:'ok',title:{}}]])assert.throws(()=>links.normalizeScriptImport(raw),/INVALID_SCRIPT_IMPORT/);
+ assert.equal(links.normalizeScriptImport([{content:' body ',title:' title '}])[0].content,'body');
+ cases.push('custom-link schemes and credentials validated; script imports reject malformed records');
+
+ for(const [name,setter,ref,key] of [['ContentManagerDrawer','setData','dataRef','CONTENT_MANAGER_STORAGE_KEY'],['PhoneRewardsDrawer','setPhones','phonesRef','PHONE_REWARDS_STORAGE_KEY']]){
+  let fail=true,updates=0;const original={unchanged:true};const sandbox={[ref]:{current:original},[key]:'fixture',writeMigratedStorage:()=>!fail,setDataState:()=>updates++,setPhonesState:()=>updates++};vm.createContext(sandbox);vm.runInContext('globalThis.commit='+nested(component(name),setter),sandbox);
+  assert.equal(sandbox.commit(()=>({saved:true})),false);assert.equal(updates,0);assert.equal(sandbox[ref].current,original);
+  fail=false;assert.equal(sandbox.commit(()=>({saved:true})),true);assert.equal(updates,1);assert.equal(sandbox[ref].current.saved,true);
+ }
+ const phoneSource=jsx.slice(component('PhoneRewardsDrawer').start,component('PhoneRewardsDrawer').end);
+ assert.ok(!phoneSource.includes('useState([])'));assert.ok(!phoneSource.includes('}, [phones])'));
+ const records=[];let modalClosed=0;const importContext={phonesRef:{current:[{normalized:'123'}]},rewardPhoneDigits:p=>p.normalized,setPhones:updater=>{records.push(...updater([]));return true},setShowImportModal:()=>modalClosed++,showAlert(){},t:k=>k};vm.createContext(importContext);vm.runInContext('globalThis.batch='+nested(component('PhoneRewardsDrawer'),'onImportBatch'),importContext);
+ importContext.batch([{normalized:'123'},{normalized:'456'},{normalized:'456'}]);assert.equal(records.length,1);assert.equal(modalClosed,1);
+ importContext.setPhones=()=>false;importContext.batch([{normalized:'789'}]);assert.equal(modalClosed,1);
+ cases.push('content and phone mutations commit UI only after storage; phone mount and duplicate imports safe');
+
+ const adminNode=component('AdminConfigModal');
+ const adminContext={window:{fastgcBridge:{setAccessControl:async()=>({ok:false,error:'SAVE_FAILED'})},alert(){}},accessHasPassword:false,accessUnlocked:false,invalidIpEntries:[],ipListInput:'',accessEnabled:false,clearAccessPassword:false,newAccessPassword:'',setAccessUnlocked(){},t:k=>k};vm.createContext(adminContext);vm.runInContext('globalThis.save='+nested(adminNode,'saveConfig'),adminContext);
+ assert.notEqual(await adminContext.save(),true);assert.ok(html.includes('if (await saveConfig()) onClose()'));
+ cases.push('admin configuration waits for save result before closing the editor');
+ let layoutWrites=0,layoutFails=true;const layoutContext={normalizeSeatLayout:value=>value,SEAT_LAYOUT_KEY:'layout',appStorage:{setItem(){layoutWrites++;if(layoutFails)throw Error('disk failed')}}};vm.createContext(layoutContext);const layoutFn=component('writeSeatLayout');vm.runInContext(jsx.slice(layoutFn.start,layoutFn.end),layoutContext);
+ assert.equal(layoutContext.writeSeatLayout({activeSeatId:'2'}),null);layoutFails=false;assert.equal(layoutContext.writeSeatLayout({activeSeatId:'2'}).activeSeatId,'2');assert.equal(layoutWrites,2);
+ let layoutClosed=0;const layoutSaveContext={onApplyLayout:()=>false,normalizeSeatLayout:value=>value,draftLayout:{},onClose:()=>layoutClosed++};vm.createContext(layoutSaveContext);vm.runInContext('globalThis.save='+nested(component('SeatSetupModal'),'handleSaveSeatChanges'),layoutSaveContext);layoutSaveContext.save();assert.equal(layoutClosed,0);layoutSaveContext.onApplyLayout=()=>true;layoutSaveContext.save();assert.equal(layoutClosed,1);
+ cases.push('seat layout failure retains current seat and editor; one canonical write per change');
+ let clipboardValue,removed=0,legacyResult=false;const clipboardContext={navigator:{clipboard:{async writeText(value){clipboardValue=value}}},document:{activeElement:{focus(){}},createElement:()=>({style:{},select(){},remove(){removed++}}),body:{appendChild(){}},execCommand:()=>legacyResult}};vm.createContext(clipboardContext);const copyFn=component('copyTextToClipboard');vm.runInContext(jsx.slice(copyFn.start,copyFn.end),clipboardContext);
+ assert.equal(await clipboardContext.copyTextToClipboard('  original\n'),true);assert.equal(clipboardValue,'  original\n');clipboardContext.navigator.clipboard.writeText=async()=>{throw Error('denied')};assert.equal(await clipboardContext.copyTextToClipboard('text'),false);legacyResult=true;assert.equal(await clipboardContext.copyTextToClipboard('text'),true);assert.equal(removed,2);assert.equal(await clipboardContext.copyTextToClipboard(''),false);
+ cases.push('copy awaits confirmed success, handles denied clipboard and cleans up fallback without touching actual clipboard');
  console.log(JSON.stringify({passed:true,cases}));
 }finally{
  const resolved=fs.realpathSync(directory);if(path.dirname(resolved)!==fs.realpathSync(generated)||!path.basename(resolved).startsWith('audit-fixture-'))throw Error('Unsafe test cleanup');
